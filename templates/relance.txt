@@ -1,0 +1,18 @@
+Bonjour $nom_complet,
+
+Votre adhésion à $association ($formule), souscrite le $date_adhesion,
+arrive à échéance le $date_fin.
+
+Votre engagement compte beaucoup pour nous : c'est lui qui permet à
+l'association de poursuivre son action. Pour renouveler votre adhésion,
+il vous suffit de suivre ce lien :
+
+$lien_adhesion
+
+L'opération ne prend qu'une minute. Si vous avez déjà renouvelé depuis
+l'envoi de ce message, merci de ne pas en tenir compte.
+
+Une question, une remarque ? Répondez simplement à ce message.
+
+Merci pour votre soutien,
+L'équipe $association

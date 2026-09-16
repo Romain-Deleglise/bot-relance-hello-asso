@@ -1,0 +1,14 @@
+# Relance quotidienne des adhésions HelloAsso, à 9h00 (heure du serveur).
+# Installation :  crontab -e   puis copier la ligne adaptée à votre déploiement.
+#
+# Le script journalise sur stdout ET dans LOG_FILE ; la redirection ci-dessous
+# capture en plus les erreurs d'environnement (interpréteur absent, etc.).
+
+# --- Déploiement classique (virtualenv) ------------------------------------
+0 9 * * * cd /srv/relance-adhesions && /srv/relance-adhesions/.venv/bin/python -m relance_adhesions >> /var/log/relance-adhesions.cron.log 2>&1
+
+# --- Déploiement Docker ------------------------------------------------------
+# 0 9 * * * docker run --rm --env-file /srv/relance-adhesions/.env -v /srv/relance-adhesions/data:/app/data -v /srv/relance-adhesions/logs:/app/logs relance-adhesions >> /var/log/relance-adhesions.cron.log 2>&1
+
+# --- Vérification hebdomadaire en simulation (facultatif) -------------------
+# 0 8 * * 1 cd /srv/relance-adhesions && .venv/bin/python -m relance_adhesions --dry-run --days-before 30 >> /var/log/relance-adhesions.dryrun.log 2>&1
