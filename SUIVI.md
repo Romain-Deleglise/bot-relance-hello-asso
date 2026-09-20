@@ -1,10 +1,11 @@
-# Passation — Bot de relance des adhésions HelloAsso (Pause IA)
+# Suivi — Bot de relance des adhésions HelloAsso (Pause IA)
 
-Document autonome destiné à une IA ou à une personne reprenant le projet sans
-aucun contexte préalable. Il contient l'état exact du code, les faits vérifiés
-sur l'API HelloAsso, les pièges rencontrés, et ce qu'il reste à faire.
+Document de suivi autonome, destiné à une IA ou à une personne reprenant le
+projet sans aucun contexte préalable. Il contient l'état exact du code, les
+faits vérifiés sur l'API HelloAsso, les pièges rencontrés, et ce qu'il reste à
+faire. Il est mis à jour au fil de l'avancement.
 
-**Dernière mise à jour :** 20 septembre 2026
+**Dernière mise à jour :** 20 septembre 2026 (après-midi)
 **Dépôt :** https://github.com/Romain-Deleglise/bot-relance-hello-asso
 **Branche de travail :** `claude/helloasso-membership-renewal-f6j7l0`
 **Pull request :** https://github.com/Romain-Deleglise/bot-relance-hello-asso/pull/1
@@ -33,10 +34,10 @@ Deux relances par échéance :
 | Authentification API | **Vérifiée sur l'API réelle** |
 | Récupération des adhésions | **Vérifiée sur l'API réelle** |
 | Calcul des échéances | Vérifié sur données réelles, cohérent avec l'export CSV |
-| Pagination | Corrigée après diagnostic ; **reste à confirmer sur l'API réelle** |
+| Pagination | **Confirmée sur l'API réelle** le 20/09/2026 — 198 items analysés (voir 6.1) |
 | Envoi de mails | **Jamais testé** — aucun SMTP configuré à ce jour |
 | Mise en cron | Non faite |
-| Textes des mails | Fonctionnels mais à retravailler (demande explicite de Romain) |
+| Textes des mails | Fonctionnels mais à retravailler — **volontairement traités en dernier** (décision Romain 20/09) |
 
 **Aucun mail n'a jamais été envoyé à un adhérent.** Le projet n'a tourné qu'en
 mode simulation (`--dry-run`).
@@ -188,20 +189,23 @@ Diagnostic API : `.venv/bin/python -m outils.diagnostic_pagination`
 
 ## 6. Tâches restantes, par ordre de priorité
 
-### 6.1 BLOQUANT — Confirmer que la pagination est réparée
+### 6.1 ~~BLOQUANT~~ — RÉSOLU le 20/09/2026 : pagination confirmée
 
-Le dernier correctif (commit `9ddda3b`) n'a **pas encore été exécuté contre
-l'API réelle**. Il est validé par 31 tests et par une simulation sur 198
-adhésions, mais les quatre corrections précédentes semblaient elles aussi
-correctes avant d'échouer sur le terrain.
+Le correctif (commit `9ddda3b`) a été **exécuté contre l'API réelle** le
+20/09/2026 en dry-run. La sortie donne :
 
-Lancer le dry-run ci-dessus et vérifier la ligne
-`N items d'adhésion analysés`.
+```
+198 items d'adhésion analysés, 198 exploitables
+```
 
-* **Si N ≈ 200** — c'est réparé. HelloAsso annonce 198 contributeurs, et
-  l'export CSV contient 162 prénoms distincts sur 14 mois.
-* **Si N = 100 exactement** — ce n'est pas réparé. Relancer le diagnostic de
-  pagination et repartir de sa sortie, sans formuler d'hypothèse a priori.
+N ≈ 200, et non N = 100 exact : la pagination n'est plus tronquée. Le chiffre
+concorde avec les 198 contributeurs annoncés par HelloAsso. Ce blocant est
+**fermé**.
+
+Réserve (non bloquante) : la concordance 198 = 198 contributeurs est un signal
+fort mais pas une preuve formelle d'exhaustivité. Toute anomalie de comptage
+future doit produire un avertissement visible (cf. section 7) plutôt qu'un
+arrêt silencieux ; en cas de doute, rejouer `outils/diagnostic_pagination.py`.
 
 ### 6.2 BLOQUANT — Trancher la question des paiements mensuels
 
@@ -225,11 +229,15 @@ Effet de calendrier associé : avec un paiement étalé sur douze mois, le préa
 « votre adhésion arrive à échéance » quinze jours après avoir payé peut
 surprendre ; le texte devrait le dire explicitement.
 
-### 6.3 Retravailler les textes des mails
+### 6.3 Retravailler les textes des mails — À FAIRE EN DERNIER
+
+**Décision Romain (20/09/2026) : on avance d'abord sur la partie technique, les
+textes seront retravaillés à la fin.** Ce point est donc gelé jusqu'à ce que le
+reste soit stabilisé — d'autant qu'il dépend de la réponse au point 6.2.
 
 Demande explicite de Romain : les quatre templates (`templates/relance.txt`,
 `relance.html`, `relance-expiration.txt`, `relance-expiration.html`) sont
-fonctionnels mais pas aboutis. Ils dépendent de la réponse au point 6.2.
+fonctionnels mais pas aboutis.
 
 Variables disponibles : `$nom`, `$prenom`, `$nom_complet`, `$email`,
 `$date_fin`, `$date_adhesion`, `$formule`, `$association`, `$lien_adhesion`.
