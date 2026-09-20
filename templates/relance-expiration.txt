@@ -1,0 +1,18 @@
+Bonjour $nom_complet,
+
+Votre adhésion à $association ($formule) arrive à son terme aujourd'hui.
+
+Si vous souhaitez continuer à soutenir notre action, le renouvellement
+se fait ici, en une minute :
+
+$lien_adhesion
+
+Si vous préférez ne pas renouveler, nous le comprenons tout à fait — et
+nous vous remercions sincèrement pour l'année écoulée. Vous n'avez aucune
+démarche à effectuer, et ce message est le dernier que vous recevrez au
+sujet de cette échéance.
+
+Une question, une remarque ? Répondez simplement à ce message.
+
+Merci pour votre soutien,
+L'équipe $association
