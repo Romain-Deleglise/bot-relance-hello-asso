@@ -35,6 +35,7 @@ Deux relances par échéance :
 | Récupération des adhésions | **Vérifiée sur l'API réelle** |
 | Calcul des échéances | Vérifié sur données réelles, cohérent avec l'export CSV |
 | Pagination | **Confirmée sur l'API réelle** le 20/09/2026 — 198 items analysés (voir 6.1) |
+| Paiements mensuels (6.2) | **Tranché** : pas d'auto-renouvellement, relance justifiée (confiance ~95 %, cf. 6.2) |
 | Envoi de mails | **Jamais testé** — aucun SMTP configuré à ce jour |
 | Mise en cron | Non faite |
 | Textes des mails | Fonctionnels mais à retravailler — **volontairement traités en dernier** (décision Romain 20/09) |
@@ -207,27 +208,51 @@ fort mais pas une preuve formelle d'exhaustivité. Toute anomalie de comptage
 future doit produire un avertissement visible (cf. section 7) plutôt qu'un
 arrêt silencieux ; en cas de doute, rejouer `outils/diagnostic_pagination.py`.
 
-### 6.2 BLOQUANT — Trancher la question des paiements mensuels
+### 6.2 ~~BLOQUANT~~ — TRANCHÉ le 20/09/2026 : les relances sont justifiées
 
 **91 % des adhésions de Pause IA sont en « Paiement en plusieurs fois »**
 (678 lignes sur 749 dans l'export des paiements).
 
-Question ouverte, non résolue : **ces prélèvements mensuels s'arrêtent-ils au
-bout de 12 mois, ou se poursuivent-ils automatiquement ?**
+Question qui était ouverte : **ces prélèvements mensuels s'arrêtent-ils au bout
+de 12 mois, ou se poursuivent-ils automatiquement ?**
 
-* S'ils s'arrêtent : la relance est justifiée, tout est correct.
-* S'ils continuent : ces adhérents se renouvellent déjà seuls. Leur envoyer
-  « votre adhésion arrive à échéance » serait déroutant, et pourrait les
-  inciter à résilier. Il faudrait alors les exclure de la sélection.
+**Réponse retenue (confiance ~95 %) : ils s'arrêtent. La relance est justifiée.**
 
-Cette question conditionne à la fois la logique de sélection et le texte des
-mails. **Ne pas envoyer de mail réel avant de l'avoir tranchée.** La réponse
-est dans la configuration du formulaire d'adhésion, côté espace HelloAsso.
+Trois éléments convergents :
 
-Effet de calendrier associé : avec un paiement étalé sur douze mois, le préavis
-à J-15 arrive entre l'avant-dernière et la dernière mensualité. Recevoir
-« votre adhésion arrive à échéance » quinze jours après avoir payé peut
-surprendre ; le texte devrait le dire explicitement.
+1. **Deux produits distincts chez HelloAsso** :
+   * l'adhésion à **période de validité définie** (année civile, scolaire, ou
+     **année glissante = `MovingYear`**) : échéance fixe, **pas de reconduction
+     tacite** — l'association doit lancer une campagne de renouvellement ;
+   * l'**« adhésion mensuelle »** : abonnement récurrent reconduit tacitement le
+     1er du mois, statut membre maintenu tant que l'abonnement est actif.
+   Ce sont deux mécanismes différents. Seul le second s'auto-renouvelle.
+2. **Paiement en plusieurs fois et renouvellement automatique sont mutuellement
+   exclusifs** sur un formulaire HelloAsso (source : centre d'aide et blog
+   HelloAsso). Un formulaire qui propose le paiement échelonné — le cas de
+   Pause IA — ne peut donc pas être à reconduction tacite ; les mensualités ne
+   font que fractionner une cotisation à montant fixe et s'arrêtent une fois le
+   total payé.
+3. **Corroboration par notre propre mesure** : le formulaire renvoie
+   `validityType=MovingYear` avec une échéance calculée à J+365. Un abonnement
+   auto-renouvelé n'aurait pas ce modèle de validité à terme fixe.
+
+Sources : blog HelloAsso « Durée de validité et renouvellement des cotisations »
+(le renouvellement y est décrit comme une campagne à lancer manuellement),
+centre d'aide « paiement en plusieurs fois », blog « votre outil de paiement des
+adhésions évolue ».
+
+**Réserve honnête :** les pages HelloAsso n'ont pas pu être lues directement
+(bloquées par le proxy réseau lors de la vérification) ; la conclusion s'appuie
+sur des résumés de recherche + la donnée API mesurée. Vérification définitive à
+30 s, côté Romain, dans l'admin HelloAsso : si l'option du formulaire s'appelle
+**« paiement en plusieurs fois »** (et non « adhésion mensuelle / renouvellement
+automatique »), c'est confirmé à 100 %.
+
+Effet de calendrier à garder en tête pour les textes (6.3) : avec un paiement
+étalé sur douze mois, le préavis à J-15 arrive entre l'avant-dernière et la
+dernière mensualité. Recevoir « votre adhésion arrive à échéance » quinze jours
+après avoir payé peut surprendre ; le texte devra le dire explicitement.
 
 ### 6.3 Retravailler les textes des mails — À FAIRE EN DERNIER
 
