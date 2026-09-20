@@ -91,7 +91,10 @@ class Config:
     # Une relance est envoyée quand la date de fin d'adhésion tombe dans
     # l'intervalle [aujourd'hui - days_after_expiry ; aujourd'hui + days_before_expiry].
     days_before_expiry: int = 15
-    days_after_expiry: int = 0
+    # Le mail d'expiration part APRÈS l'échéance (jamais le jour J) et reste
+    # éligible jusqu'à `days_after_expiry` jours après. 14 = mail d'expiration
+    # envoyé le lendemain de l'échéance, avec 2 semaines de marge de rattrapage.
+    days_after_expiry: int = 14
 
     # Durée de validité par défaut (jours) pour les formulaires en année
     # glissante (`MovingYear` chez HelloAsso). 365 = 12 mois glissants.
@@ -132,9 +135,11 @@ class Config:
     # Adresse de désinscription (en-tête List-Unsubscribe). À défaut, on retombe
     # sur Reply-To puis sur l'expéditeur.
     unsubscribe_email: str = ""
-    mail_subject: str = "Votre adhésion arrive à échéance"
-    # Sujet de la seconde relance, envoyée le jour de l'expiration.
-    mail_subject_expiration: str = "Votre adhésion à $association expire aujourd'hui"
+    mail_subject: str = "Votre adhésion à $association arrive à échéance"
+    # Sujet de la seconde relance, envoyée après l'expiration.
+    mail_subject_expiration: str = (
+        "Il est encore temps de renouveler votre adhésion à $association"
+    )
 
     # --- Contenu ------------------------------------------------------------
     association_name: str = "Pause IA"
@@ -163,7 +168,7 @@ class Config:
             helloasso_api_base=_get("HELLOASSO_API_BASE", "https://api.helloasso.com/v5"),
             helloasso_auth_base=_get("HELLOASSO_AUTH_BASE", "https://api.helloasso.com"),
             days_before_expiry=_get_int("RELANCE_DAYS_BEFORE_EXPIRY", 15),
-            days_after_expiry=_get_int("RELANCE_DAYS_AFTER_EXPIRY", 0),
+            days_after_expiry=_get_int("RELANCE_DAYS_AFTER_EXPIRY", 14),
             membership_duration_days=_get_int("RELANCE_MEMBERSHIP_DURATION_DAYS", 365),
             max_membership_age_days=_get_int("RELANCE_MAX_MEMBERSHIP_AGE_DAYS", 800),
             timezone=_get("RELANCE_TIMEZONE", "Europe/Paris"),
@@ -183,10 +188,12 @@ class Config:
             mail_reply_to=_get("MAIL_REPLY_TO"),
             mail_bcc=_get("MAIL_BCC"),
             unsubscribe_email=_get("UNSUBSCRIBE_EMAIL"),
-            mail_subject=_get("MAIL_SUBJECT", "Votre adhésion arrive à échéance"),
+            mail_subject=_get(
+                "MAIL_SUBJECT", "Votre adhésion à $association arrive à échéance"
+            ),
             mail_subject_expiration=_get(
                 "MAIL_SUBJECT_EXPIRATION",
-                "Votre adhésion à $association expire aujourd'hui",
+                "Il est encore temps de renouveler votre adhésion à $association",
             ),
             association_name=_get("ASSOCIATION_NAME", "Pause IA"),
             renewal_url=_get("RENEWAL_URL"),

@@ -19,12 +19,12 @@ from relance_adhesions.state import ReminderStore  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def make_membership():
+def make_membership(amount_cents=2500):
     return Membership(
         item_id=42, order_id=7, order_date=date(2025, 3, 10), end_date=date(2026, 3, 10),
         first_name="Jean", last_name="Dupont", email="jean@example.org",
         tier_name="Adhésion annuelle", form_slug="adhesion", form_type="Membership",
-        validity_type="MovingYear",
+        validity_type="MovingYear", amount_cents=amount_cents,
     )
 
 
@@ -43,7 +43,7 @@ def make_config():
         template_html=str(ROOT / "templates/relance.html"),
         template_text_expiration=str(ROOT / "templates/relance-expiration.txt"),
         template_html_expiration=str(ROOT / "templates/relance-expiration.html"),
-        mail_subject_expiration="Votre adhésion à $association expire aujourd'hui",
+        mail_subject_expiration="Il est encore temps de renouveler votre adhésion à $association",
     )
 
 
@@ -74,11 +74,24 @@ def test_store_journal_execution(tmp_path):
 def test_rendu_du_mail():
     rendered = MailRenderer(make_config()).render(make_reminder())
     assert rendered.subject == "Votre adhésion à Pause IA arrive à échéance"
-    assert "Jean Dupont" in rendered.text
+    assert "Jean" in rendered.text
     assert "10/03/2026" in rendered.text
     assert "https://example.org/adhesion" in rendered.text
+    # Le montant est injecté dans le préavis.
+    assert "d'un montant de 25 €" in rendered.text
     assert rendered.html and "Renouveler mon adhésion" in rendered.html
     # Aucune variable de template non substituée.
+    assert "$" not in rendered.text
+
+
+def test_montant_inconnu_ne_laisse_pas_de_mention_bancale():
+    """Sans montant, la clause parenthétique disparaît proprement."""
+    from relance_adhesions.membership import Reminder
+
+    config = make_config()
+    reminder = Reminder(make_membership(amount_cents=None), STAGE_PREAVIS)
+    rendered = MailRenderer(config).render(reminder)
+    assert "montant" not in rendered.text  # pas de « (d'un montant de ) »
     assert "$" not in rendered.text
 
 
@@ -88,7 +101,8 @@ def test_les_deux_etapes_ont_des_textes_distincts():
     expiration = renderer.render(make_reminder(STAGE_EXPIRATION))
     assert preavis.subject != expiration.subject
     assert preavis.text != expiration.text
-    assert "aujourd'hui" in expiration.subject
+    # Le mail d'expiration parle bien d'une adhésion déjà expirée.
+    assert "a expiré" in expiration.text
     assert "$" not in expiration.text
 
 
@@ -201,7 +215,7 @@ def test_dry_run_ecrit_les_mails_sur_disque(tmp_path):
     texte = (tmp_path / "mails" / "001-preavis-jean@example.org.txt").read_text(
         encoding="utf-8"
     )
-    assert "Jean Dupont" in texte and "10/03/2026" in texte
+    assert "Jean" in texte and "10/03/2026" in texte
     eml = (tmp_path / "mails" / "001-preavis-jean@example.org.eml").read_text(
         encoding="utf-8"
     )

@@ -60,8 +60,10 @@ class MailRenderer:
 
     Les templates sont des fichiers séparés du code, éditables sans toucher au
     Python. Variables disponibles :
-    `$nom`, `$prenom`, `$nom_complet`, `$email`, `$date_fin`, `$date_adhesion`,
-    `$formule`, `$association`, `$lien_adhesion`.
+    `$nom`, `$prenom` (repli sur le nom complet si absent), `$nom_complet`,
+    `$email`, `$date_fin`, `$date_adhesion`, `$formule`, `$montant` (ex. « 25 € »),
+    `$mention_montant` (clause « (d'un montant de 25 €) », vide si inconnu),
+    `$association`, `$lien_adhesion`.
     """
 
     def __init__(self, config: Config) -> None:
@@ -93,14 +95,20 @@ class MailRenderer:
         return file.read_text(encoding="utf-8")
 
     def context(self, membership: Membership) -> dict[str, str]:
+        montant = membership.amount_str
         return {
             "nom": membership.last_name,
-            "prenom": membership.first_name,
+            # Prénom avec repli : jamais « Bonjour , » si l'API n'a pas de prénom.
+            "prenom": membership.first_name or membership.display_name,
             "nom_complet": membership.display_name,
             "email": membership.email,
             "date_fin": _format_fr_date(membership.end_date),
             "date_adhesion": _format_fr_date(membership.order_date),
             "formule": membership.tier_name,
+            "montant": montant,
+            # Clause parenthétique prête à l'emploi : disparaît proprement si le
+            # montant est inconnu (évite un « (d'un montant de ) » bancal).
+            "mention_montant": f" (d'un montant de {montant})" if montant else "",
             "association": self.config.association_name,
             "lien_adhesion": self.config.renewal_url,
         }

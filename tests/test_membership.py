@@ -144,7 +144,7 @@ def test_resolve_timezone_retombe_sur_utc_sans_base_de_fuseaux(monkeypatch):
 
 
 def test_select_to_remind_deux_etapes():
-    """Préavis avant l'échéance, second mail le jour de l'expiration."""
+    """Préavis avant l'échéance ; mail d'expiration APRÈS l'échéance (pas le jour J)."""
     today = date(2026, 3, 1)
     dans_9_jours = normalize_item(make_item(1, "2025-03-10T09:00:00Z"), "MovingYear", None, 365)
     dans_6_mois = normalize_item(make_item(2, "2025-09-10T09:00:00Z"), "MovingYear", None, 365)
@@ -153,18 +153,31 @@ def test_select_to_remind_deux_etapes():
     illimitee = normalize_item(make_item(5, "2025-03-10T09:00:00Z"), "Illimited", None, 365)
     toutes = [dans_9_jours, dans_6_mois, expire_aujourdhui, expiree_hier, illimitee]
 
-    relances = select_to_remind(toutes, today, days_before=15, days_after=0)
+    relances = select_to_remind(toutes, today, days_before=15, days_after=14)
     obtenu = {(r.membership.item_id, r.stage) for r in relances}
-    assert obtenu == {(1, STAGE_PREAVIS), (3, STAGE_EXPIRATION)}
+    # #3 expire pile aujourd'hui : aucun mail ce jour-là (le préavis est parti
+    # avant, l'expiration partira demain). #4 a expiré hier → mail d'expiration.
+    assert obtenu == {(1, STAGE_PREAVIS), (4, STAGE_EXPIRATION)}
 
 
-def test_une_adhesion_ne_declenche_pas_les_deux_etapes_le_meme_jour():
-    """Les deux fenêtres sont disjointes : jamais deux mails le même jour."""
+def test_le_jour_de_l_echeance_ne_declenche_aucun_mail():
+    """La borne haute exclue : rien le jour J (le préavis a déjà été envoyé)."""
     today = date(2026, 3, 1)
     expire_aujourdhui = normalize_item(
         make_item(1, "2025-03-01T09:00:00Z"), "MovingYear", None, 365
     )
-    relances = select_to_remind([expire_aujourdhui], today, days_before=15, days_after=7)
+    assert select_to_remind([expire_aujourdhui], today, days_before=15, days_after=14) == []
+
+
+def test_mail_expiration_part_le_lendemain_de_l_echeance():
+    """« a expiré » est vrai : le mail d'expiration part à partir de J+1."""
+    expiree_hier = normalize_item(
+        make_item(1, "2025-02-28T09:00:00Z"), "MovingYear", None, 365
+    )  # échéance 2026-02-28
+    # La veille de l'échéance : rien encore côté expiration.
+    assert select_to_remind([expiree_hier], date(2026, 2, 28), 15, 14) == []
+    # Le lendemain de l'échéance : mail d'expiration.
+    relances = select_to_remind([expiree_hier], date(2026, 3, 1), 15, 14)
     assert [r.stage for r in relances] == [STAGE_EXPIRATION]
 
 
@@ -173,9 +186,22 @@ def test_rattrapage_des_adhesions_recemment_expirees():
     expiree_il_y_a_3_jours = normalize_item(
         make_item(1, "2025-02-26T09:00:00Z"), "MovingYear", None, 365
     )
-    assert select_to_remind([expiree_il_y_a_3_jours], today, 15, 0) == []
+    # Fenêtre de rattrapage trop courte : hors champ.
+    assert select_to_remind([expiree_il_y_a_3_jours], today, 15, 2) == []
     relances = select_to_remind([expiree_il_y_a_3_jours], today, 15, 7)
     assert [r.stage for r in relances] == [STAGE_EXPIRATION]
+
+
+def test_montant_formate_depuis_les_centimes():
+    item = make_item(1)
+    item["amount"] = 2500
+    m = normalize_item(item, "MovingYear", None, 365)
+    assert m.amount_cents == 2500
+    assert m.amount_str == "25 €"
+    item["amount"] = 1550
+    assert normalize_item(item, "MovingYear", None, 365).amount_str == "15,50 €"
+    # Montant absent : chaîne vide, pas d'exception.
+    assert normalize_item(make_item(2), "MovingYear", None, 365).amount_str == ""
 
 
 def test_les_deux_relances_ont_des_cles_anti_doublon_distinctes():

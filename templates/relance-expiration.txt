@@ -1,18 +1,21 @@
-Bonjour $nom_complet,
+Bonjour $prenom,
 
-Votre adhésion à $association ($formule) arrive à son terme aujourd'hui.
+Nous vous avons écrit il y a deux semaines : votre adhésion à $association
+a expiré le $date_fin, et nous n'aimerions pas vous perdre.
 
-Si vous souhaitez continuer à soutenir notre action, le renouvellement
-se fait ici, en une minute :
+Nous savons que ce genre de rappel passe facilement à la trappe, alors
+voici un dernier petit mot. Si vous souhaitez continuer à nous soutenir,
+il suffit d'un instant :
 
 $lien_adhesion
 
-Si vous préférez ne pas renouveler, nous le comprenons tout à fait — et
-nous vous remercions sincèrement pour l'année écoulée. Vous n'avez aucune
-démarche à effectuer, et ce message est le dernier que vous recevrez au
-sujet de cette échéance.
+Votre soutien a un impact concret : c'est grâce à nos adhérents que nous
+pouvons agir en toute indépendance, informer le public et interpeller les
+décideurs sur les dangers de la course à l'IA.
 
-Une question, une remarque ? Répondez simplement à ce message.
+Et si vous préférez ne pas renouveler, aucun souci : nous respectons votre
+choix et vous remercions sincèrement pour le soutien que vous nous avez
+déjà apporté.
 
-Merci pour votre soutien,
-L'équipe $association
+Au plaisir de continuer l'aventure avec vous,
+L'équipe de $association

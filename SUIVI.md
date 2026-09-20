@@ -39,7 +39,7 @@ Deux relances par échéance :
 | Robustesse | **Audit fait + correctifs appliqués** (voir 6.7) : en-têtes de délivrabilité, retry SMTP, fuseau, déduplication par personne |
 | Envoi de mails | Canal retenu : **AWS SES (SMTP)** — reste à renseigner `.env` et vérifier région / production access / SPF-DKIM (voir 6.4). Jamais testé en réel à ce jour |
 | Mise en cron | Non faite |
-| Textes des mails | Fonctionnels mais à retravailler — **volontairement traités en dernier** (décision Romain 20/09) |
+| Textes des mails | **Faits (20/09)** : deux textes de Romain intégrés ; timing du mail d'expiration calé pour partir après l'échéance ; variable `$montant` ajoutée |
 
 **Aucun mail n'a jamais été envoyé à un adhérent.** Le projet n'a tourné qu'en
 mode simulation (`--dry-run`).
@@ -257,31 +257,35 @@ Effet de calendrier à garder en tête pour les textes (6.3) : avec un paiement
 dernière mensualité. Recevoir « votre adhésion arrive à échéance » quinze jours
 après avoir payé peut surprendre ; le texte devra le dire explicitement.
 
-### 6.3 Retravailler les textes des mails — À FAIRE EN DERNIER
+### 6.3 Textes des mails — FAIT le 20/09/2026
 
-**Décision Romain (20/09/2026) : on avance d'abord sur la partie technique, les
-textes seront retravaillés à la fin.** Ce point est donc gelé jusqu'à ce que le
-reste soit stabilisé — d'autant qu'il dépend de la réponse au point 6.2.
+Les deux textes fournis par Romain (ton chaleureux, argument de l'indépendance,
+sans mention SEPA) ont été intégrés dans les quatre templates
+(`templates/relance*.txt` / `.html`).
 
-Demande explicite de Romain : les quatre templates (`templates/relance.txt`,
-`relance.html`, `relance-expiration.txt`, `relance-expiration.html`) sont
-fonctionnels mais pas aboutis. Romain a fourni deux textes de référence (ton
-chaleureux, argument de l'indépendance, sans mention SEPA) à intégrer ici.
+Sujets par défaut mis à jour en conséquence :
+* préavis : « Votre adhésion à $association arrive à échéance » ;
+* expiration : « Il est encore temps de renouveler votre adhésion à $association ».
 
-Variables disponibles : `$nom`, `$prenom`, `$nom_complet`, `$email`,
-`$date_fin`, `$date_adhesion`, `$formule`, `$association`, `$lien_adhesion`.
-Syntaxe `string.Template`, également utilisable dans `MAIL_SUBJECT` et
+Variables disponibles : `$nom`, `$prenom` (repli sur le nom complet si absent),
+`$nom_complet`, `$email`, `$date_fin`, `$date_adhesion`, `$formule`,
+`$montant` (ex. « 25 € »), `$mention_montant` (clause « (d'un montant de 25 €) »,
+vide si le montant est inconnu), `$association`, `$lien_adhesion`. Syntaxe
+`string.Template`, également utilisable dans `MAIL_SUBJECT` /
 `MAIL_SUBJECT_EXPIRATION`.
 
-**Point de timing à trancher en même temps que les textes.** Le second mail
-proposé dit « votre adhésion **a expiré** le `$date_fin` ». Pour que ce soit
-toujours vrai, l'étape `expiration` doit partir **après** l'échéance, pas le
-jour J. Or la fenêtre actuelle `[today - days_after ; today]` déclenche le mail
-**le jour même** de l'échéance (« expire aujourd'hui »). Deux options quand on
-fera les textes : (a) adapter le texte du jour J (« expire aujourd'hui ») ; ou
-(b) introduire un décalage pour que le second mail parte N jours après
-l'échéance (ex. J+15), ce qui colle au texte « a expiré ». À décider avec les
-templates ; ne rien changer à la logique de dates avant.
+**Timing tranché.** Le second mail dit « votre adhésion a expiré le `$date_fin` ».
+Pour que ce soit toujours vrai, `select_to_remind` a été modifié : l'étape
+`expiration` part désormais **après** l'échéance (borne haute exclue), donc à
+partir du lendemain, jamais le jour J. `RELANCE_DAYS_AFTER_EXPIRY` (défaut 14)
+donne deux semaines de rattrapage. Le préavis, lui, part avant l'échéance
+(`RELANCE_DAYS_BEFORE_EXPIRY`, défaut 15). Les deux fenêtres restent disjointes.
+
+**À vérifier avant le premier envoi réel — le montant.** `$montant` provient du
+champ `amount` de l'item HelloAsso, supposé en **centimes** (donc `2500` → « 25 €
+»). L'unité n'a pas pu être confirmée sur données réelles ici : relire un `.eml`
+du dry-run et s'assurer que le montant s'affiche « 25 € » et non « 2500 € » ou
+« 0,25 € ». Si l'unité diffère, ajuster `Membership.amount_str`.
 
 ### 6.4 Configurer l'envoi de mails — canal retenu : AWS SES (SMTP)
 

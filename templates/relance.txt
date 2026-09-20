@@ -1,18 +1,18 @@
-Bonjour $nom_complet,
+Bonjour $prenom,
 
-Votre adhésion à $association ($formule), souscrite le $date_adhesion,
-arrive à échéance le $date_fin.
+Votre adhésion à $association$mention_montant arrive à son terme le
+$date_fin, et nous espérons vous compter encore parmi nous.
 
-Votre engagement compte beaucoup pour nous : c'est lui qui permet à
-l'association de poursuivre son action. Pour renouveler votre adhésion,
-il vous suffit de suivre ce lien :
+En adhérant, vous faites bien plus que soutenir financièrement
+l'association : vous renforcez notre indépendance. Nos adhérents sont
+notre socle, celui qui nous permet de porter la voix des citoyens sur les
+risques de l'intelligence artificielle sans dépendre de personne.
+
+Renouveler votre adhésion prend moins d'une minute :
 
 $lien_adhesion
 
-L'opération ne prend qu'une minute. Si vous avez déjà renouvelé depuis
-l'envoi de ce message, merci de ne pas en tenir compte.
+Chaque contribution compte, même modeste.
 
-Une question, une remarque ? Répondez simplement à ce message.
-
-Merci pour votre soutien,
-L'équipe $association
+Merci pour votre engagement à nos côtés,
+L'équipe de $association

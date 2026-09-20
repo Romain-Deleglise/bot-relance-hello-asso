@@ -86,10 +86,22 @@ class Membership:
     form_slug: str
     form_type: str
     validity_type: str
+    amount_cents: int | None = None
 
     @property
     def full_name(self) -> str:
         return " ".join(part for part in (self.first_name, self.last_name) if part).strip()
+
+    @property
+    def amount_str(self) -> str:
+        """Montant de la cotisation en euros (ex. « 25 € », « 25,50 € »).
+
+        HelloAsso exprime les montants en centimes. Chaîne vide si inconnu.
+        """
+        if self.amount_cents is None:
+            return ""
+        euros, cents = divmod(int(self.amount_cents), 100)
+        return f"{euros} €" if cents == 0 else f"{euros},{cents:02d} €"
 
     @property
     def display_name(self) -> str:
@@ -246,6 +258,12 @@ def normalize_item(
     first_name = (user.get("firstName") or payer.get("firstName") or "").strip()
     last_name = (user.get("lastName") or payer.get("lastName") or "").strip()
 
+    # Montant de l'item, en centimes chez HelloAsso. À utiliser dans les mails
+    # (« cotisation de X € »). Unité à vérifier sur un dump réel avant tout
+    # envoi (cf. SUIVI 6.3) : le montant doit s'afficher « 25 € », pas « 2500 € ».
+    raw_amount = item.get("amount")
+    amount_cents = int(raw_amount) if isinstance(raw_amount, (int, float)) else None
+
     return Membership(
         item_id=int(item.get("id") or 0),
         order_id=order.get("id"),
@@ -258,6 +276,7 @@ def normalize_item(
         form_slug=(order.get("formSlug") or "").strip(),
         form_type=(order.get("formType") or "Membership").strip(),
         validity_type=validity_type,
+        amount_cents=amount_cents,
     )
 
 
@@ -307,12 +326,16 @@ def select_to_remind(
 
     * `preavis`     : l'échéance est à venir, dans les `days_before` jours —
                       fenêtre `]today ; today + days_before]`.
-    * `expiration`  : l'échéance est atteinte ou tout juste dépassée —
-                      fenêtre `[today - days_after ; today]`.
+    * `expiration`  : l'échéance est **déjà passée**, depuis au plus `days_after`
+                      jours — fenêtre `[today - days_after ; today[` (borne haute
+                      exclue).
 
-    Les deux fenêtres sont disjointes par construction (la date du jour
-    appartient à la seconde), de sorte qu'une même adhésion ne peut pas
-    déclencher les deux relances le même jour.
+    La borne haute exclue est délibérée : le mail d'expiration ne part donc
+    jamais le jour J, mais seulement à partir du lendemain de l'échéance. Ainsi
+    la formulation « votre adhésion a expiré le … » est toujours exacte au moment
+    de l'envoi. Les deux fenêtres restent disjointes (le jour de l'échéance
+    n'appartient à aucune des deux : le préavis a déjà été envoyé avant, le mail
+    d'expiration partira après), donc jamais deux mails le même jour.
     """
     preavis_end = today + timedelta(days=days_before)
     expiration_start = today - timedelta(days=days_after)
@@ -324,7 +347,7 @@ def select_to_remind(
             continue
         if today < end_date <= preavis_end:
             reminders.append(Reminder(membership, STAGE_PREAVIS))
-        elif expiration_start <= end_date <= today:
+        elif expiration_start <= end_date < today:
             reminders.append(Reminder(membership, STAGE_EXPIRATION))
 
     # Les échéances les plus urgentes d'abord.
