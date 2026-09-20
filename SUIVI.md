@@ -326,6 +326,21 @@ Pour passer plus tard à l'API HTTP SES (v2) plutôt qu'au SMTP : écrire dans
 `mailer.py` une classe exposant `send(reminder, rendered_mail)` et la substituer
 à `SmtpMailer` dans `cli.py`. Non nécessaire tant que le SMTP suffit.
 
+### 6.5bis Lancement — rattrapage unique du 20/09/2026
+
+Au démarrage, 37 adhésions avaient expiré sans renouvellement pendant la période
+« aveugle » (avant l'existence du bot), échéances du 20/08 au 16/09. Décision :
+rattrapage unique. Mis en œuvre **sans intervention récurrente** en réglant
+`RELANCE_DAYS_AFTER_EXPIRY=35` **en permanence** dans `.env` :
+
+* le premier passage du cron envoie le rattrapage (les 37) + les préavis ;
+* en régime normal, l'anti-doublon garantit un seul mail par personne ; la
+  fenêtre de 35 j ne sert plus qu'à absorber une éventuelle coupure prolongée du
+  cron. Aucun retour manuel nécessaire, rien à remettre à 14 ensuite.
+
+Le mail d'expiration a été reformulé pour ne plus supposer qu'un préavis a été
+envoyé (cohérent pour la vague de lancement, qui n'a pas reçu de mail 1).
+
 ### 6.5 Mise en production — durcie le 20/09/2026
 
 `crontab.example` et `Dockerfile` révisés :
