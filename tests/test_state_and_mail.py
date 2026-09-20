@@ -118,6 +118,21 @@ def test_construction_du_message():
     assert message.is_multipart()
 
 
+def test_mode_test_redirige_tous_les_mails_vers_une_seule_adresse():
+    """MAIL_REDIRECT_TO : To redirigé, vrai destinataire rappelé, pas de Bcc."""
+    config = make_config()
+    config.mail_redirect_to = "moi@example.org"
+    config.mail_bcc = "archive@example.org"
+    message = SmtpMailer(config).build_message(
+        make_membership(), MailRenderer(config).render(make_reminder())
+    )
+    assert message["To"] == "Jean Dupont <moi@example.org>"
+    assert message["X-Original-Recipient"] == "jean@example.org"
+    assert message["Subject"].startswith("[TEST → jean@example.org]")
+    # En mode test, pas de copie cachée (le mail part déjà vers l'adresse de test).
+    assert message["Bcc"] is None
+
+
 def test_message_porte_les_entetes_de_delivrabilite():
     """Message-ID, Date et List-Unsubscribe présents et cohérents."""
     config = make_config()

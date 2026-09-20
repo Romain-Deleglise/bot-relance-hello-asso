@@ -132,6 +132,10 @@ class Config:
     mail_from_name: str = ""
     mail_reply_to: str = ""
     mail_bcc: str = ""
+    # Mode TEST : si renseigné, TOUS les mails partent vers cette seule adresse
+    # (au lieu des adhérents) et rien n'est enregistré en anti-doublon. Sert à
+    # valider la chaîne d'envoi réelle sans écrire à personne. Vide en prod.
+    mail_redirect_to: str = ""
     # Adresse de désinscription (en-tête List-Unsubscribe). À défaut, on retombe
     # sur Reply-To puis sur l'expéditeur.
     unsubscribe_email: str = ""
@@ -196,6 +200,7 @@ class Config:
             mail_from_name=_get("MAIL_FROM_NAME", "Pause IA"),
             mail_reply_to=_get("MAIL_REPLY_TO"),
             mail_bcc=_get("MAIL_BCC"),
+            mail_redirect_to=_get("MAIL_REDIRECT_TO"),
             unsubscribe_email=_get("UNSUBSCRIBE_EMAIL"),
             mail_subject=_get(
                 "MAIL_SUBJECT", "Votre adhésion à $association arrive à échéance"

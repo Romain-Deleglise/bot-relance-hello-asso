@@ -139,9 +139,16 @@ def build_message(
 ) -> EmailMessage:
     """Assemble le message final (texte + HTML alternatif)."""
     message = EmailMessage()
-    message["Subject"] = mail.subject
+    # Mode TEST : tout est redirigé vers une seule adresse, le vrai destinataire
+    # est rappelé dans le sujet et un en-tête, et la copie cachée est désactivée.
+    redirect = config.mail_redirect_to
+    message["Subject"] = f"[TEST → {membership.email}] {mail.subject}" if redirect else mail.subject
     message["From"] = formataddr((config.mail_from_name or None, config.mail_from))
-    message["To"] = formataddr((membership.full_name or None, membership.email))
+    if redirect:
+        message["To"] = formataddr((membership.full_name or None, redirect))
+        message["X-Original-Recipient"] = membership.email
+    else:
+        message["To"] = formataddr((membership.full_name or None, membership.email))
     # `Date` et `Message-ID` explicites : leur absence pénalise la délivrabilité
     # (filtres anti-spam) et casse le fil de discussion côté client. On les pose
     # nous-mêmes plutôt que de compter sur le serveur d'envoi, et pour que les
@@ -157,7 +164,8 @@ def build_message(
     unsubscribe = config.unsubscribe_email or config.mail_reply_to or config.mail_from
     if unsubscribe:
         message["List-Unsubscribe"] = f"<mailto:{unsubscribe}?subject=Desabonnement>"
-    if config.mail_bcc:
+    # Pas de copie cachée en mode test (le message part déjà vers l'adresse de test).
+    if config.mail_bcc and not redirect:
         message["Bcc"] = config.mail_bcc
     message.set_content(mail.text)
     if mail.html:

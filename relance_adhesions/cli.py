@@ -179,6 +179,12 @@ def run(config: Config, today: date | None = None, dump_dir: str | None = None) 
         logger.warning("MODE DRY-RUN : aucun mail ne sera réellement envoyé")
     else:
         config.validate_for_sending()
+        if config.mail_redirect_to:
+            logger.warning(
+                "MODE TEST : tous les mails seront redirigés vers %s "
+                "(les adhérents ne reçoivent rien, aucun envoi n'est enregistré)",
+                config.mail_redirect_to,
+            )
 
     renderer = MailRenderer(config)
     client = HelloAssoClient(
@@ -276,7 +282,9 @@ def run(config: Config, today: date | None = None, dump_dir: str | None = None) 
                     logger.error("Échec d'envoi : %s", exc)
                     continue
                 sent += 1
-                if not config.dry_run:
+                if not config.dry_run and not config.mail_redirect_to:
+                    # En mode test (redirection), on n'enregistre RIEN : l'envoi
+                    # réel ultérieur doit bien partir à tous les adhérents.
                     # On n'enregistre qu'après un envoi réellement réussi. Une
                     # erreur d'écriture (disque plein, verrou) ne doit pas
                     # interrompre le reste du batch ; elle est signalée, et au
