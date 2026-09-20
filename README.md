@@ -193,11 +193,17 @@ sinon l'anti-doublon repart de zéro à chaque exécution.
 5. **Déduplication par personne** — seule l'adhésion la plus récente de chaque
    adresse est retenue : une personne adhérente depuis trois ans ne reçoit pas
    trois relances.
-6. **Fenêtre** — échéance comprise dans
-   `[aujourd'hui − RELANCE_DAYS_AFTER_EXPIRY ; aujourd'hui + RELANCE_DAYS_BEFORE_EXPIRY]`.
-7. **Anti-doublon** — base SQLite (`STATE_DB`), clé `item_id:date_de_fin`.
-   Inclure l'échéance dans la clé garantit qu'après renouvellement la personne
-   sera bien relancée l'année suivante, pour sa nouvelle échéance.
+6. **Deux étapes de relance**, à fenêtres disjointes :
+   * **préavis** — échéance dans `]aujourd'hui ; aujourd'hui + RELANCE_DAYS_BEFORE_EXPIRY]`
+   * **jour d'expiration** — échéance dans `[aujourd'hui − RELANCE_DAYS_AFTER_EXPIRY ; aujourd'hui]`
+
+   Chaque personne reçoit au plus un mail par étape et par échéance, et jamais
+   les deux le même jour. Chaque étape a ses propres templates et son propre
+   sujet.
+7. **Anti-doublon** — base SQLite (`STATE_DB`), clé `item_id:date_de_fin:étape`.
+   L'échéance dans la clé garantit qu'après renouvellement la personne sera
+   bien relancée l'année suivante ; l'étape permet au second mail de partir
+   malgré le premier.
 8. **Envoi** — SMTP, une connexion réutilisée, message `text/plain` +
    `text/html`. La ligne n'est marquée comme envoyée qu'après succès réel.
 9. **Journalisation** — console + fichier avec rotation, plus une table
@@ -231,9 +237,18 @@ sinon l'anti-doublon repart de zéro à chaque exécution.
 ## 6. Personnaliser le mail
 
 Les templates sont des fichiers séparés du code, éditables sans toucher au
-Python : `templates/relance.txt` (version texte, obligatoire) et
-`templates/relance.html` (version HTML, facultative — supprimez le fichier ou
-videz `TEMPLATE_HTML` pour n'envoyer que du texte).
+Python. Un jeu par étape de relance :
+
+| Fichier | Étape | Obligatoire |
+|---|---|---|
+| `templates/relance.txt` | préavis, texte | oui |
+| `templates/relance.html` | préavis, HTML | non |
+| `templates/relance-expiration.txt` | jour d'expiration, texte | non |
+| `templates/relance-expiration.html` | jour d'expiration, HTML | non |
+
+Les templates de l'étape « expiration » sont facultatifs : s'ils sont absents,
+ceux du préavis sont réutilisés. Videz `TEMPLATE_HTML` pour n'envoyer que du
+texte.
 
 Substitution de variables `$nom_de_variable` (syntaxe `string.Template`) :
 

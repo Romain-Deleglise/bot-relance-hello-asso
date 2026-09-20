@@ -222,7 +222,12 @@ class HelloAssoClient:
             pagination = payload.get("pagination") or {}
             logger.debug("Page %s de %s : pagination=%s", page_number, path, pagination)
 
-            total_count = pagination.get("totalCount")
+            # HelloAsso renvoie `totalCount = -1` quand le total est inconnu
+            # (c'est le cas sur /items). Toute valeur <= 0 est donc une absence
+            # d'information, surtout pas un total réel : la traiter comme un
+            # total tronquerait la liste dès la première page.
+            raw_total = pagination.get("totalCount")
+            total_count = int(raw_total) if raw_total is not None and int(raw_total) > 0 else None
             if total_count is not None and not announced_total:
                 logger.info("HelloAsso annonce %s résultat(s) au total", total_count)
                 announced_total = True
@@ -234,7 +239,7 @@ class HelloAssoClient:
             # --- Conditions d'arrêt, toutes positives -----------------------
             if not records:
                 break
-            if total_count is not None and total_yielded >= int(total_count):
+            if total_count is not None and total_yielded >= total_count:
                 break
             if len(records) < page_size:
                 # Page incomplète : c'est la dernière.
@@ -246,14 +251,18 @@ class HelloAssoClient:
                 break
 
             # --- Avancée à la page suivante ---------------------------------
+            # L'index de page est incrémenté dans tous les cas, y compris
+            # lorsqu'un `continuationToken` est fourni : si le serveur honore
+            # le token il ignore l'index, et s'il ignore le token l'index
+            # assure quand même la progression. Ne se fier qu'au token
+            # exposerait à relire indéfiniment la même page.
+            page_params["pageIndex"] = int(page_index) + 1
             token = pagination.get("continuationToken")
             if token and token not in seen_tokens:
                 seen_tokens.add(token)
                 page_params["continuationToken"] = token
             else:
-                # Pas de token exploitable : repli sur l'index de page.
                 page_params.pop("continuationToken", None)
-                page_params["pageIndex"] = int(page_index) + 1
         else:
             logger.warning(
                 "Pagination interrompue après %s pages sur %s : résultats "

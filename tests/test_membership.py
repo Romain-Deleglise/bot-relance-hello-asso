@@ -7,6 +7,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from relance_adhesions.membership import (  # noqa: E402
+    STAGE_EXPIRATION,
+    STAGE_PREAVIS,
+    Reminder,
     add_one_year,
     compute_end_date,
     keep_latest_per_member,
@@ -58,7 +61,7 @@ def test_normalize_item_utilise_l_email_du_payeur():
     assert membership.email == "a@example.org"
     assert membership.full_name == "Jean Dupont"
     assert membership.end_date == date(2026, 3, 10)
-    assert membership.dedup_key == "1:2026-03-10"
+    assert Reminder(membership, STAGE_PREAVIS).dedup_key == "1:2026-03-10:preavis"
 
 
 def test_normalize_item_repli_sur_un_champ_personnalise():
@@ -83,16 +86,44 @@ def test_keep_latest_per_member_deduplique_par_email():
     assert [m.item_id for m in retenues] == [2]
 
 
-def test_select_to_remind_fenetre():
+def test_select_to_remind_deux_etapes():
+    """Préavis avant l'échéance, second mail le jour de l'expiration."""
     today = date(2026, 3, 1)
     dans_9_jours = normalize_item(make_item(1, "2025-03-10T09:00:00Z"), "MovingYear", None, 365)
     dans_6_mois = normalize_item(make_item(2, "2025-09-10T09:00:00Z"), "MovingYear", None, 365)
-    expiree_hier = normalize_item(make_item(3, "2025-02-28T09:00:00Z"), "MovingYear", None, 365)
-    illimitee = normalize_item(make_item(4, "2025-03-10T09:00:00Z"), "Illimited", None, 365)
-    toutes = [dans_9_jours, dans_6_mois, expiree_hier, illimitee]
+    expire_aujourdhui = normalize_item(make_item(3, "2025-03-01T09:00:00Z"), "MovingYear", None, 365)
+    expiree_hier = normalize_item(make_item(4, "2025-02-28T09:00:00Z"), "MovingYear", None, 365)
+    illimitee = normalize_item(make_item(5, "2025-03-10T09:00:00Z"), "Illimited", None, 365)
+    toutes = [dans_9_jours, dans_6_mois, expire_aujourdhui, expiree_hier, illimitee]
 
-    sans_rattrapage = select_to_remind(toutes, today, days_before=15, days_after=0)
-    assert [m.item_id for m in sans_rattrapage] == [1]
+    relances = select_to_remind(toutes, today, days_before=15, days_after=0)
+    obtenu = {(r.membership.item_id, r.stage) for r in relances}
+    assert obtenu == {(1, STAGE_PREAVIS), (3, STAGE_EXPIRATION)}
 
-    avec_rattrapage = select_to_remind(toutes, today, days_before=15, days_after=7)
-    assert sorted(m.item_id for m in avec_rattrapage) == [1, 3]
+
+def test_une_adhesion_ne_declenche_pas_les_deux_etapes_le_meme_jour():
+    """Les deux fenêtres sont disjointes : jamais deux mails le même jour."""
+    today = date(2026, 3, 1)
+    expire_aujourdhui = normalize_item(
+        make_item(1, "2025-03-01T09:00:00Z"), "MovingYear", None, 365
+    )
+    relances = select_to_remind([expire_aujourdhui], today, days_before=15, days_after=7)
+    assert [r.stage for r in relances] == [STAGE_EXPIRATION]
+
+
+def test_rattrapage_des_adhesions_recemment_expirees():
+    today = date(2026, 3, 1)
+    expiree_il_y_a_3_jours = normalize_item(
+        make_item(1, "2025-02-26T09:00:00Z"), "MovingYear", None, 365
+    )
+    assert select_to_remind([expiree_il_y_a_3_jours], today, 15, 0) == []
+    relances = select_to_remind([expiree_il_y_a_3_jours], today, 15, 7)
+    assert [r.stage for r in relances] == [STAGE_EXPIRATION]
+
+
+def test_les_deux_relances_ont_des_cles_anti_doublon_distinctes():
+    """C'est ce qui permet au second mail de partir malgré le premier."""
+    membership = normalize_item(make_item(1), "MovingYear", None, 365)
+    preavis = Reminder(membership, STAGE_PREAVIS)
+    expiration = Reminder(membership, STAGE_EXPIRATION)
+    assert preavis.dedup_key != expiration.dedup_key

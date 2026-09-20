@@ -59,15 +59,44 @@ class Membership:
         """Nom affiché dans le mail, avec repli neutre si l'API n'a rien fourni."""
         return self.full_name or "cher adhérent, chère adhérente"
 
+
+
+# Étapes de relance. Chaque adhésion en reçoit au plus une de chaque type.
+STAGE_PREAVIS = "preavis"        # quelques jours avant l'échéance
+STAGE_EXPIRATION = "expiration"  # le jour de l'expiration
+
+STAGE_LABELS = {
+    STAGE_PREAVIS: "préavis",
+    STAGE_EXPIRATION: "jour d'expiration",
+}
+
+
+@dataclass
+class Reminder:
+    """Une relance à envoyer : une adhésion, à une étape donnée."""
+
+    membership: Membership
+    stage: str
+
     @property
     def dedup_key(self) -> str:
-        """Clé d'anti-doublon : une relance par adhésion *et* par échéance.
+        """Clé d'anti-doublon : une relance par adhésion, échéance *et* étape.
 
-        Inclure la date de fin garantit qu'une personne ayant renouvelé
-        recevra bien une relance l'année suivante, pour sa nouvelle échéance.
+        Inclure la date de fin garantit qu'une personne ayant renouvelé sera
+        bien relancée l'année suivante, pour sa nouvelle échéance. Inclure
+        l'étape permet les deux relances successives sans que la première
+        n'empêche la seconde.
         """
-        end = self.end_date.isoformat() if self.end_date else "none"
-        return f"{self.item_id}:{end}"
+        end = (
+            self.membership.end_date.isoformat()
+            if self.membership.end_date
+            else "none"
+        )
+        return f"{self.membership.item_id}:{end}:{self.stage}"
+
+    @property
+    def stage_label(self) -> str:
+        return STAGE_LABELS.get(self.stage, self.stage)
 
 
 def parse_datetime(value: Any) -> datetime | None:
@@ -203,17 +232,30 @@ def select_to_remind(
     today: date,
     days_before: int,
     days_after: int,
-) -> list[Membership]:
-    """Retient les adhésions dont l'échéance tombe dans la fenêtre de relance.
+) -> list[Reminder]:
+    """Retient les relances à envoyer, réparties en deux étapes distinctes.
 
-    Fenêtre : `[today - days_after ; today + days_before]`, bornes incluses.
-    `days_after` permet de rattraper les adhésions déjà expirées depuis peu.
+    * `preavis`     : l'échéance est à venir, dans les `days_before` jours —
+                      fenêtre `]today ; today + days_before]`.
+    * `expiration`  : l'échéance est atteinte ou tout juste dépassée —
+                      fenêtre `[today - days_after ; today]`.
+
+    Les deux fenêtres sont disjointes par construction (la date du jour
+    appartient à la seconde), de sorte qu'une même adhésion ne peut pas
+    déclencher les deux relances le même jour.
     """
-    window_start = today - timedelta(days=days_after)
-    window_end = today + timedelta(days=days_before)
-    return [
-        membership
-        for membership in memberships
-        if membership.end_date is not None
-        and window_start <= membership.end_date <= window_end
-    ]
+    preavis_end = today + timedelta(days=days_before)
+    expiration_start = today - timedelta(days=days_after)
+
+    reminders: list[Reminder] = []
+    for membership in memberships:
+        end_date = membership.end_date
+        if end_date is None:
+            continue
+        if today < end_date <= preavis_end:
+            reminders.append(Reminder(membership, STAGE_PREAVIS))
+        elif expiration_start <= end_date <= today:
+            reminders.append(Reminder(membership, STAGE_EXPIRATION))
+
+    # Les échéances les plus urgentes d'abord.
+    return sorted(reminders, key=lambda r: (r.membership.end_date, r.membership.email))

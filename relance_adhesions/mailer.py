@@ -23,7 +23,12 @@ from pathlib import Path
 from string import Template
 
 from .config import Config
-from .membership import Membership
+from .membership import (
+    STAGE_EXPIRATION,
+    STAGE_PREAVIS,
+    Membership,
+    Reminder,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +52,11 @@ class RenderedMail:
 class MailRenderer:
     """Rendu des templates de mail (substitution `$variable`, cf. string.Template).
 
+    Un jeu de templates par étape de relance : le préavis et le mail du jour
+    d'expiration n'ont pas le même ton. Si les templates de l'étape
+    « expiration » sont absents, ceux du préavis sont réutilisés, de sorte
+    qu'un seul jeu de textes suffit à faire tourner le bot.
+
     Les templates sont des fichiers séparés du code, éditables sans toucher au
     Python. Variables disponibles :
     `$nom`, `$prenom`, `$nom_complet`, `$email`, `$date_fin`, `$date_adhesion`,
@@ -55,8 +65,19 @@ class MailRenderer:
 
     def __init__(self, config: Config) -> None:
         self.config = config
-        self.text_template = self._read(config.template_text, required=True)
-        self.html_template = self._read(config.template_html, required=False)
+        preavis_text = self._read(config.template_text, required=True)
+        preavis_html = self._read(config.template_html, required=False)
+        self._templates: dict[str, tuple[str, str | None, str]] = {
+            STAGE_PREAVIS: (preavis_text or "", preavis_html, config.mail_subject),
+            STAGE_EXPIRATION: (
+                self._read(config.template_text_expiration, required=False)
+                or preavis_text
+                or "",
+                self._read(config.template_html_expiration, required=False)
+                or preavis_html,
+                config.mail_subject_expiration or config.mail_subject,
+            ),
+        }
 
     @staticmethod
     def _read(path: str, required: bool) -> str | None:
@@ -66,7 +87,7 @@ class MailRenderer:
         if not file.is_file():
             if required:
                 raise MailError(f"Template introuvable : {file}")
-            logger.info("Template HTML absent (%s), envoi en texte brut uniquement", file)
+            logger.info("Template absent (%s), repli sur le template générique", file)
             return None
         return file.read_text(encoding="utf-8")
 
@@ -83,18 +104,15 @@ class MailRenderer:
             "lien_adhesion": self.config.renewal_url,
         }
 
-    def render(self, membership: Membership) -> RenderedMail:
-        context = self.context(membership)
+    def render(self, reminder: Reminder) -> RenderedMail:
+        context = self.context(reminder.membership)
+        text, html, subject = self._templates[reminder.stage]
         # `safe_substitute` : un `$` oublié dans un template ne fait pas
         # échouer toute l'exécution.
         return RenderedMail(
-            subject=Template(self.config.mail_subject).safe_substitute(context),
-            text=Template(self.text_template or "").safe_substitute(context),
-            html=(
-                Template(self.html_template).safe_substitute(context)
-                if self.html_template
-                else None
-            ),
+            subject=Template(subject).safe_substitute(context),
+            text=Template(text).safe_substitute(context),
+            html=Template(html).safe_substitute(context) if html else None,
         )
 
 
@@ -153,7 +171,8 @@ class SmtpMailer:
     def build_message(self, membership: Membership, mail: RenderedMail) -> EmailMessage:
         return build_message(self.config, membership, mail)
 
-    def send(self, membership: Membership, mail: RenderedMail) -> None:
+    def send(self, reminder: Reminder, mail: RenderedMail) -> None:
+        membership = reminder.membership
         message = self.build_message(membership, mail)
         try:
             self._connect().send_message(message)
@@ -206,19 +225,23 @@ class DryRunMailer:
         """Nom de fichier sûr dérivé de l'adresse."""
         return re.sub(r"[^A-Za-z0-9._@-]", "_", email)[:80]
 
-    def send(self, membership: Membership, mail: RenderedMail) -> None:
+    def send(self, reminder: Reminder, mail: RenderedMail) -> None:
+        membership = reminder.membership
         logger.info(
-            "[DRY-RUN] Mail non envoyé → %s <%s> | échéance %s | sujet : %s",
+            "[DRY-RUN] Mail non envoyé → %s <%s> | échéance %s | étape %s | sujet : %s",
             membership.display_name,
             membership.email,
             membership.end_date,
+            reminder.stage_label,
             mail.subject,
         )
         if not self.dump_dir:
             return
 
         self._index += 1
-        stem = f"{self._index:03d}-{self._safe_name(membership.email)}"
+        stem = (
+            f"{self._index:03d}-{reminder.stage}-{self._safe_name(membership.email)}"
+        )
         try:
             message = build_message(self.config, membership, mail)
             (self.dump_dir / f"{stem}.eml").write_bytes(message.as_bytes())

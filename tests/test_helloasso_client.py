@@ -143,3 +143,43 @@ def test_401_en_cours_de_route_declenche_une_reauthentification():
     items = list(make_client(session).iter_membership_items("pause-ia"))
     assert [item["id"] for item in items] == [1]
     assert session.token_responses == []  # deux authentifications consommées
+
+
+def test_total_count_negatif_ne_stoppe_pas_la_pagination():
+    """Régression : HelloAsso renvoie totalCount = -1 quand le total est inconnu.
+
+    Traiter -1 comme un total réel arrêtait la pagination dès la première page.
+    """
+    session = FakeSession([TOKEN_OK], [
+        _page([1, 2], 1, token="t1", total_count=-1),
+        _page([3, 4], 2, token="t2", total_count=-1),
+        _page([5], 3, total_count=-1),
+    ])
+    items = list(make_client(session).iter_membership_items("pause-ia", page_size=2))
+    assert [item["id"] for item in items] == [1, 2, 3, 4, 5]
+
+
+def test_progression_meme_si_le_serveur_ignore_le_continuation_token():
+    """Régression : ne jamais dépendre du seul token pour avancer.
+
+    Un serveur qui renvoie un token mais pagine sur `pageIndex` faisait
+    relire la première page en boucle, jusqu'à répétition du token.
+    """
+    pages = {1: [1, 2], 2: [3, 4], 3: [5]}
+
+    class TokenIgnorant:
+        def __init__(self):
+            self.index_demandes = []
+
+        def post(self, url, **kwargs):
+            return TOKEN_OK
+
+        def get(self, url, params=None, **kwargs):
+            index = int((params or {}).get("pageIndex", 1))
+            self.index_demandes.append(index)
+            return _page(pages.get(index, []), index, token=f"tok{index}")
+
+    session = TokenIgnorant()
+    items = list(make_client(session).iter_membership_items("pause-ia", page_size=2))
+    assert [item["id"] for item in items] == [1, 2, 3, 4, 5]
+    assert session.index_demandes == [1, 2, 3]

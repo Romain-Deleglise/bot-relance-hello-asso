@@ -107,12 +107,18 @@ class Config:
     mail_reply_to: str = ""
     mail_bcc: str = ""
     mail_subject: str = "Votre adhésion arrive à échéance"
+    # Sujet de la seconde relance, envoyée le jour de l'expiration.
+    mail_subject_expiration: str = "Votre adhésion à $association expire aujourd'hui"
 
     # --- Contenu ------------------------------------------------------------
     association_name: str = "Pause IA"
     renewal_url: str = ""
     template_text: str = "templates/relance.txt"
     template_html: str = "templates/relance.html"
+    # Templates de la seconde relance. S'ils sont absents, ceux du préavis
+    # sont réutilisés : le bot reste fonctionnel avec un seul jeu de textes.
+    template_text_expiration: str = "templates/relance-expiration.txt"
+    template_html_expiration: str = "templates/relance-expiration.html"
 
     # --- Exécution ----------------------------------------------------------
     state_db: str = "data/relances.sqlite3"
@@ -146,10 +152,20 @@ class Config:
             mail_reply_to=_get("MAIL_REPLY_TO"),
             mail_bcc=_get("MAIL_BCC"),
             mail_subject=_get("MAIL_SUBJECT", "Votre adhésion arrive à échéance"),
+            mail_subject_expiration=_get(
+                "MAIL_SUBJECT_EXPIRATION",
+                "Votre adhésion à $association expire aujourd'hui",
+            ),
             association_name=_get("ASSOCIATION_NAME", "Pause IA"),
             renewal_url=_get("RENEWAL_URL"),
             template_text=_get("TEMPLATE_TEXT", "templates/relance.txt"),
             template_html=_get("TEMPLATE_HTML", "templates/relance.html"),
+            template_text_expiration=_get(
+                "TEMPLATE_TEXT_EXPIRATION", "templates/relance-expiration.txt"
+            ),
+            template_html_expiration=_get(
+                "TEMPLATE_HTML_EXPIRATION", "templates/relance-expiration.html"
+            ),
             state_db=_get("STATE_DB", "data/relances.sqlite3"),
             log_file=_get("LOG_FILE"),
             log_level=_get("LOG_LEVEL", "INFO"),

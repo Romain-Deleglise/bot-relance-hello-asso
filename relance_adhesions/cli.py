@@ -24,6 +24,7 @@ from .helloasso import (
 from .mailer import DryRunMailer, MailError, MailRenderer, SmtpMailer
 from .membership import (
     Membership,
+    Reminder,
     keep_latest_per_member,
     normalize_item,
     parse_date,
@@ -181,14 +182,15 @@ def run(config: Config, today: date | None = None, dump_dir: str | None = None) 
             latest, today, config.days_before_expiry, config.days_after_expiry
         )
         logger.info(
-            "Fenêtre de relance : échéance entre %s et %s → %s adhésion(s) concernée(s)",
-            today - timedelta(days=config.days_after_expiry),
+            "Préavis : échéance entre demain et %s | Expiration : échéance "
+            "entre %s et aujourd'hui → %s relance(s) à envoyer",
             today + timedelta(days=config.days_before_expiry),
+            today - timedelta(days=config.days_after_expiry),
             len(selected),
         )
 
         # Anti-doublon : on écarte ce qui a déjà été relancé pour cette échéance.
-        pending = [m for m in selected if not store.already_sent(m.dedup_key)]
+        pending = [r for r in selected if not store.already_sent(r.dedup_key)]
         skipped = len(selected) - len(pending)
         if skipped:
             logger.info("%s relance(s) déjà envoyée(s) précédemment, ignorée(s)", skipped)
@@ -207,12 +209,14 @@ def run(config: Config, today: date | None = None, dump_dir: str | None = None) 
 
         if pending:
             logger.info("Destinataires retenus :")
-            for membership in pending:
+            for reminder in pending:
+                membership = reminder.membership
                 logger.info(
-                    "  · %-32s %-34s échéance %s  (%s, formulaire « %s »)",
+                    "  · %-32s %-34s échéance %s  [%s]  (%s, formulaire « %s »)",
                     membership.display_name,
                     membership.email,
                     membership.end_date,
+                    reminder.stage_label,
                     membership.validity_type,
                     membership.form_slug or "?",
                 )
@@ -221,9 +225,10 @@ def run(config: Config, today: date | None = None, dump_dir: str | None = None) 
             DryRunMailer(config, dump_dir) if config.dry_run else SmtpMailer(config)
         )
         with mailer:
-            for membership in pending:
+            for reminder in pending:
+                membership = reminder.membership
                 try:
-                    mailer.send(membership, renderer.render(membership))
+                    mailer.send(reminder, renderer.render(reminder))
                 except MailError as exc:
                     errors += 1
                     logger.error("Échec d'envoi : %s", exc)
@@ -232,14 +237,15 @@ def run(config: Config, today: date | None = None, dump_dir: str | None = None) 
                 if not config.dry_run:
                     # On n'enregistre qu'après un envoi réellement réussi.
                     store.mark_sent(
-                        membership.dedup_key,
+                        reminder.dedup_key,
                         membership.item_id,
                         membership.email,
                         membership.end_date,
                     )
                 logger.info(
-                    "Relance %s → %s <%s> (échéance %s)",
+                    "Relance %s (%s) → %s <%s> (échéance %s)",
                     "simulée" if config.dry_run else "envoyée",
+                    reminder.stage_label,
                     membership.display_name, membership.email, membership.end_date,
                 )
 
