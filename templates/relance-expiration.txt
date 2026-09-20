@@ -1,10 +1,10 @@
 Bonjour $prenom,
 
-Nous vous avons écrit il y a deux semaines : votre adhésion à $association
-a expiré le $date_fin, et nous n'aimerions pas vous perdre.
+Votre adhésion à $association a expiré le $date_fin, et nous n'aimerions
+pas vous perdre.
 
 Nous savons que ce genre de rappel passe facilement à la trappe, alors
-voici un dernier petit mot. Si vous souhaitez continuer à nous soutenir,
+voici un petit mot. Si vous souhaitez continuer à nous soutenir,
 il suffit d'un instant :
 
 $lien_adhesion
