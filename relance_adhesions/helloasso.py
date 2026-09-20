@@ -212,7 +212,6 @@ class HelloAssoClient:
         """
         page_params = dict(params)
         page_size = int(params.get("pageSize") or 20)
-        seen_tokens: set[str] = set()
         seen_ids: set[Any] = set()
         total_yielded = 0
         announced_total = False
@@ -272,18 +271,16 @@ class HelloAssoClient:
             page_index = pagination.get("pageIndex") or page_number
 
             # --- Avancée à la page suivante ---------------------------------
-            # L'index de page est incrémenté dans tous les cas, y compris
-            # lorsqu'un `continuationToken` est fourni : si le serveur honore
-            # le token il ignore l'index, et s'il ignore le token l'index
-            # assure quand même la progression. Ne se fier qu'au token
-            # exposerait à relire indéfiniment la même page.
+            # Mesuré sur l'API réelle (cf. outils/diagnostic_pagination.py) :
+            # `continuationToken` signifie « reprendre après cet enregistrement ».
+            # Le transmettre EN MÊME TEMPS que `pageIndex=2` revient à demander
+            # de sauter une page entière au-delà du token, et l'API renvoie
+            # alors une page vide — c'est ce qui tronquait la liste à 100.
+            # La pagination par `pageIndex` seul est vérifiée fonctionnelle :
+            # on s'en tient à elle, sans jamais envoyer de token.
+            page_params.pop("continuationToken", None)
             page_params["pageIndex"] = int(page_index) + 1
-            token = pagination.get("continuationToken")
-            if token and token not in seen_tokens:
-                seen_tokens.add(token)
-                page_params["continuationToken"] = token
-            else:
-                page_params.pop("continuationToken", None)
+
         else:
             logger.warning(
                 "Pagination interrompue après %s pages sur %s : résultats "

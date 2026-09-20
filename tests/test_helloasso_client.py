@@ -69,18 +69,26 @@ def _page(ids, page_index, total_pages=None, token=None, total_count=None):
                                  "pagination": pagination})
 
 
-def test_pagination_par_continuation_token():
+def test_pagination_par_page_index():
+    """La pagination se fait par `pageIndex`, jamais par `continuationToken`.
+
+    Mesuré sur l'API réelle : envoyer le token en même temps que `pageIndex=2`
+    fait renvoyer une page vide, car le token signifie déjà « reprendre après
+    cet enregistrement ». Le token ne doit donc jamais être transmis.
+    """
     session = FakeSession([TOKEN_OK], [
-        _page([1, 2], 1, total_pages=2, token="abc"),
-        _page([3], 2, total_pages=2),
+        _page([1, 2], 1, token="abc"),
+        _page([3], 2, token="def"),
     ])
     items = list(make_client(session).iter_membership_items("pause-ia", page_size=2))
 
     assert [item["id"] for item in items] == [1, 2, 3]
     assert session.get_calls[0][1]["tierTypes"] == ["Membership"]
     assert session.get_calls[0][1]["itemStates"] == ["Processed", "Registered"]
-    assert session.get_calls[1][1]["continuationToken"] == "abc"
     assert session.get_calls[0][0].endswith("/organizations/pause-ia/items")
+    # Aucun appel ne doit porter de continuationToken.
+    assert all("continuationToken" not in params for _, params in session.get_calls)
+    assert [params["pageIndex"] for _, params in session.get_calls] == [1, 2]
 
 
 def test_pagination_poursuit_sans_total_pages():
@@ -157,32 +165,6 @@ def test_total_count_negatif_ne_stoppe_pas_la_pagination():
     ])
     items = list(make_client(session).iter_membership_items("pause-ia", page_size=2))
     assert [item["id"] for item in items] == [1, 2, 3, 4, 5]
-
-
-def test_progression_meme_si_le_serveur_ignore_le_continuation_token():
-    """Régression : ne jamais dépendre du seul token pour avancer.
-
-    Un serveur qui renvoie un token mais pagine sur `pageIndex` faisait
-    relire la première page en boucle, jusqu'à répétition du token.
-    """
-    pages = {1: [1, 2], 2: [3, 4], 3: [5]}
-
-    class TokenIgnorant:
-        def __init__(self):
-            self.index_demandes = []
-
-        def post(self, url, **kwargs):
-            return TOKEN_OK
-
-        def get(self, url, params=None, **kwargs):
-            index = int((params or {}).get("pageIndex", 1))
-            self.index_demandes.append(index)
-            return _page(pages.get(index, []), index, token=f"tok{index}")
-
-    session = TokenIgnorant()
-    items = list(make_client(session).iter_membership_items("pause-ia", page_size=2))
-    assert [item["id"] for item in items] == [1, 2, 3, 4, 5]
-    assert session.index_demandes == [1, 2, 3]
 
 
 def test_total_pages_menteur_ne_stoppe_pas_la_pagination():
