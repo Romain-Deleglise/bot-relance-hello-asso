@@ -30,7 +30,7 @@ Deux relances par échéance :
 | Élément | État |
 |---|---|
 | Code | Complet et fonctionnel |
-| Tests | 31 tests, tous au vert, sans accès réseau |
+| Tests | 56 tests, tous au vert, sans accès réseau |
 | Authentification API | **Vérifiée sur l'API réelle** |
 | Récupération des adhésions | **Vérifiée sur l'API réelle** |
 | Calcul des échéances | Vérifié sur données réelles, cohérent avec l'export CSV |
@@ -39,10 +39,16 @@ Deux relances par échéance :
 | Robustesse | **Audit fait + correctifs appliqués** (voir 6.7) : en-têtes de délivrabilité, retry SMTP, fuseau, déduplication par personne |
 | Envoi de mails | **Testé en réel via AWS SES** (région eu-west-3) le 20/09 : 6 mails envoyés en mode redirection, 0 erreur |
 | Désinscription | **Liste d'exclusion** (`data/desinscrits.txt`) : `--unsubscribe adresse@x.fr` retire quelqu'un, plus jamais relancé (voir 6.9) |
-| Mise en cron | Non faite |
+| Supervision | **En place** (voir 6.8) : détection panne mail, webhook d'alerte, dead-man switch healthchecks.io |
+| Mise en cron | **Installée** le 20/09 : passage quotidien à 7h UTC (9h Paris), avec `flock` |
+| Design des mails | **Refait** à la charte Pause IA : logo, bouton orange (`#EF6C00`), pied de page avec désinscription |
 | Textes des mails | **Faits (20/09)** : deux textes de Romain intégrés ; timing du mail d'expiration calé pour partir après l'échéance ; variable `$montant` ajoutée |
 
-**Aucun mail n'a jamais été envoyé à un adhérent.** Le projet n'a tourné qu'en
+**Un envoi réel de contrôle a été effectué le 20/09** (6 mails, en mode
+redirection vers l'adresse de test uniquement — aucun adhérent contacté).
+Le premier envoi réel *aux adhérents* n'a pas encore eu lieu : il partira au
+premier passage du cron (ou lancé à la main). Le projet a tourné en simulation
+(`--dry-run`) et en mode test (`MAIL_REDIRECT_TO`) jusqu'ici.
 mode simulation (`--dry-run`).
 
 ---
