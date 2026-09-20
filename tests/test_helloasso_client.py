@@ -57,17 +57,24 @@ def test_authentification_echouee_leve_une_erreur_dediee():
     raise AssertionError("HelloAssoAuthError attendue")
 
 
+def _page(ids, page_index, total_pages=None, token=None, total_count=None):
+    pagination = {"pageIndex": page_index, "pageSize": 2}
+    if total_pages is not None:
+        pagination["totalPages"] = total_pages
+    if token is not None:
+        pagination["continuationToken"] = token
+    if total_count is not None:
+        pagination["totalCount"] = total_count
+    return FakeResponse(payload={"data": [{"id": i} for i in ids],
+                                 "pagination": pagination})
+
+
 def test_pagination_par_continuation_token():
-    page1 = FakeResponse(payload={
-        "data": [{"id": 1}, {"id": 2}],
-        "pagination": {"pageIndex": 1, "totalPages": 2, "continuationToken": "abc"},
-    })
-    page2 = FakeResponse(payload={
-        "data": [{"id": 3}],
-        "pagination": {"pageIndex": 2, "totalPages": 2, "continuationToken": None},
-    })
-    session = FakeSession([TOKEN_OK], [page1, page2])
-    items = list(make_client(session).iter_membership_items("pause-ia"))
+    session = FakeSession([TOKEN_OK], [
+        _page([1, 2], 1, total_pages=2, token="abc"),
+        _page([3], 2, total_pages=2),
+    ])
+    items = list(make_client(session).iter_membership_items("pause-ia", page_size=2))
 
     assert [item["id"] for item in items] == [1, 2, 3]
     assert session.get_calls[0][1]["tierTypes"] == ["Membership"]
@@ -76,13 +83,61 @@ def test_pagination_par_continuation_token():
     assert session.get_calls[0][0].endswith("/organizations/pause-ia/items")
 
 
+def test_pagination_poursuit_sans_total_pages():
+    """Régression : `totalPages` absent ne doit pas faire croire à une page unique.
+
+    C'est le bug qui tronquait la liste des adhérents à la première page.
+    """
+    session = FakeSession([TOKEN_OK], [
+        _page([1, 2], 1, token="t1"),
+        _page([3, 4], 2, token="t2"),
+        _page([5], 3),
+    ])
+    items = list(make_client(session).iter_membership_items("pause-ia", page_size=2))
+    assert [item["id"] for item in items] == [1, 2, 3, 4, 5]
+
+
+def test_pagination_sans_token_retombe_sur_page_index():
+    session = FakeSession([TOKEN_OK], [
+        _page([1, 2], 1),
+        _page([3, 4], 2),
+        _page([], 3),
+    ])
+    items = list(make_client(session).iter_membership_items("pause-ia", page_size=2))
+    assert [item["id"] for item in items] == [1, 2, 3, 4]
+    assert session.get_calls[1][1]["pageIndex"] == 2
+    assert session.get_calls[2][1]["pageIndex"] == 3
+
+
+def test_pagination_s_arrete_sur_total_count():
+    session = FakeSession([TOKEN_OK], [
+        _page([1, 2], 1, token="t1", total_count=3),
+        _page([3, 4], 2, token="t2", total_count=3),
+    ])
+    items = list(make_client(session).iter_membership_items("pause-ia", page_size=2))
+    # `totalCount` atteint : on ne demande pas de page supplémentaire.
+    assert [item["id"] for item in items] == [1, 2, 3, 4]
+    assert len(session.get_calls) == 2
+
+
+def test_pagination_ne_boucle_pas_sur_un_token_repete():
+    session = FakeSession([TOKEN_OK], [
+        _page([1, 2], 1, token="meme-token"),
+        _page([3, 4], 1, token="meme-token"),
+        _page([], 2),
+    ])
+    items = list(make_client(session).iter_membership_items("pause-ia", page_size=2))
+    assert [item["id"] for item in items] == [1, 2, 3, 4]
+
+
 def test_401_en_cours_de_route_declenche_une_reauthentification():
     session = FakeSession(
         [TOKEN_OK, TOKEN_OK],
         [
             FakeResponse(401, text="expired"),
             FakeResponse(payload={"data": [{"id": 1}],
-                                  "pagination": {"pageIndex": 1, "totalPages": 1}}),
+                                  "pagination": {"pageIndex": 1, "pageSize": 100,
+                                                 "totalPages": 1}}),
         ],
     )
     items = list(make_client(session).iter_membership_items("pause-ia"))

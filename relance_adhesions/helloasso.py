@@ -197,35 +197,70 @@ class HelloAssoClient:
 
         raise HelloAssoError(f"GET {url} a échoué après {self.max_retries} essais ({last_error})")
 
-    def _paginate(self, path: str, params: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    def _paginate(
+        self, path: str, params: dict[str, Any], max_pages: int = 1000
+    ) -> Iterator[dict[str, Any]]:
         """Itère sur toutes les pages d'un endpoint paginé HelloAsso.
 
-        HelloAsso renvoie `{"data": [...], "pagination": {"pageIndex", "totalPages",
-        "continuationToken", ...}}`. On privilégie le `continuationToken`, plus
-        fiable que l'index de page quand des données sont ajoutées pendant la
-        pagination, avec repli sur `pageIndex`.
+        HelloAsso renvoie `{"data": [...], "pagination": {"pageSize", "totalCount",
+        "pageIndex", "totalPages", "continuationToken"}}`, mais ces champs ne sont
+        pas tous systématiquement présents : `totalPages` notamment peut manquer.
+        La boucle ne s'arrête donc que sur un signal *positif* de fin — page vide,
+        page incomplète, ou index ayant atteint `totalPages` quand il est connu —
+        et jamais sur une simple absence de métadonnée : sous-paginer
+        silencieusement reviendrait à ignorer une partie des adhérents.
         """
         page_params = dict(params)
+        page_size = int(params.get("pageSize") or 20)
         seen_tokens: set[str] = set()
+        total_yielded = 0
+        announced_total = False
 
-        while True:
+        for page_number in range(1, max_pages + 1):
             payload = self.get(path, page_params)
-            for record in payload.get("data") or []:
-                yield record
-
+            records = payload.get("data") or []
             pagination = payload.get("pagination") or {}
-            token = pagination.get("continuationToken")
-            page_index = pagination.get("pageIndex") or 1
-            total_pages = pagination.get("totalPages") or 1
+            logger.debug("Page %s de %s : pagination=%s", page_number, path, pagination)
 
-            if page_index >= total_pages:
-                return
+            total_count = pagination.get("totalCount")
+            if total_count is not None and not announced_total:
+                logger.info("HelloAsso annonce %s résultat(s) au total", total_count)
+                announced_total = True
+
+            for record in records:
+                yield record
+            total_yielded += len(records)
+
+            # --- Conditions d'arrêt, toutes positives -----------------------
+            if not records:
+                break
+            if total_count is not None and total_yielded >= int(total_count):
+                break
+            if len(records) < page_size:
+                # Page incomplète : c'est la dernière.
+                break
+
+            total_pages = pagination.get("totalPages")
+            page_index = pagination.get("pageIndex") or page_number
+            if total_pages is not None and int(page_index) >= int(total_pages):
+                break
+
+            # --- Avancée à la page suivante ---------------------------------
+            token = pagination.get("continuationToken")
             if token and token not in seen_tokens:
                 seen_tokens.add(token)
                 page_params["continuationToken"] = token
             else:
+                # Pas de token exploitable : repli sur l'index de page.
                 page_params.pop("continuationToken", None)
-                page_params["pageIndex"] = page_index + 1
+                page_params["pageIndex"] = int(page_index) + 1
+        else:
+            logger.warning(
+                "Pagination interrompue après %s pages sur %s : résultats "
+                "possiblement incomplets", max_pages, path,
+            )
+
+        logger.debug("%s : %s enregistrement(s) récupéré(s)", path, total_yielded)
 
     # -- Endpoints métier ----------------------------------------------------
 
