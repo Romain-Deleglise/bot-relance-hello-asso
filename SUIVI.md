@@ -315,13 +315,23 @@ Pour passer plus tard à l'API HTTP SES (v2) plutôt qu'au SMTP : écrire dans
 `mailer.py` une classe exposant `send(reminder, rendered_mail)` et la substituer
 à `SmtpMailer` dans `cli.py`. Non nécessaire tant que le SMTP suffit.
 
-### 6.5 Mise en production
+### 6.5 Mise en production — durcie le 20/09/2026
 
-Voir `crontab.example`. Ligne type :
+`crontab.example` et `Dockerfile` révisés :
 
-```cron
-0 9 * * * cd /srv/relance-adhesions && .venv/bin/python -m relance_adhesions >> /var/log/relance-adhesions.cron.log 2>&1
-```
+* **`flock`** dans la ligne cron : empêche deux exécutions de se chevaucher (une
+  exécution lente ne peut plus être doublée par la suivante → pas de double
+  relance dans la fenêtre sélection/écriture anti-doublon).
+* **Heure de cron ≠ logique de dates** : cron tourne à l'heure du serveur
+  (souvent UTC), mais la sélection des adhésions suit `RELANCE_TIMEZONE`. Exemple
+  fourni : `0 7 * * *` UTC = 9 h Paris (été).
+* **`MAILTO`** : cron notifie en cas de sortie non vide (erreur).
+* **Docker** : exécution sous utilisateur non-root (uid 10001), dossiers
+  `data/` et `logs/` créés et attribués. Les dossiers hôtes montés doivent être
+  accessibles en écriture par cet uid (`chown -R 10001 data logs`).
+* **`tzdata`** ajouté à `requirements.txt` : sans lui, `zoneinfo` échoue sur les
+  images « slim ». Repli ultime sur UTC codé en dur (`resolve_timezone`) pour
+  qu'un fuseau manquant ne puisse jamais empêcher le bot de tourner.
 
 Les volumes `data/` (base anti-doublon) et `logs/` doivent être persistés.
 

@@ -128,6 +128,21 @@ def test_today_in_renvoie_une_date():
     assert isinstance(today_in("Zone/Inexistante"), date)
 
 
+def test_resolve_timezone_retombe_sur_utc_sans_base_de_fuseaux(monkeypatch):
+    """Sur une image sans tzdata, ZoneInfo échoue pour tout nom : repli UTC."""
+    from datetime import timezone
+
+    from relance_adhesions import membership as m
+
+    def boom(*_a, **_k):
+        raise m.ZoneInfoNotFoundError("no tzdata")
+
+    monkeypatch.setattr(m, "ZoneInfo", boom)
+    assert m.resolve_timezone("Europe/Paris") == timezone.utc
+    # Le calcul de dates continue de fonctionner malgré tout.
+    assert isinstance(m.today_in("Europe/Paris"), date)
+
+
 def test_select_to_remind_deux_etapes():
     """Préavis avant l'échéance, second mail le jour de l'expiration."""
     today = date(2026, 3, 1)

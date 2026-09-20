@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -41,15 +41,29 @@ EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 DEFAULT_TIMEZONE = "Europe/Paris"
 
 
-def resolve_timezone(name: str | None) -> ZoneInfo:
-    """Renvoie le fuseau demandé, avec repli sur Europe/Paris si introuvable."""
-    try:
-        return ZoneInfo(name or DEFAULT_TIMEZONE)
-    except (ZoneInfoNotFoundError, ValueError):
-        logger.warning(
-            "Fuseau horaire %r inconnu, repli sur %s", name, DEFAULT_TIMEZONE
-        )
-        return ZoneInfo(DEFAULT_TIMEZONE)
+def resolve_timezone(name: str | None) -> tzinfo:
+    """Renvoie le fuseau demandé. Ne lève jamais : repli Paris puis UTC.
+
+    Sur un hôte sans base de fuseaux (image Docker « slim » sans `tzdata`),
+    `ZoneInfo` échoue pour *tout* nom, y compris Europe/Paris. On retombe alors
+    sur UTC plutôt que de laisser l'exception interrompre l'exécution — mieux
+    vaut un calcul de dates à ±2 h qu'un bot qui ne tourne pas du tout.
+    """
+    requested = name or DEFAULT_TIMEZONE
+    for candidate in (requested, DEFAULT_TIMEZONE):
+        try:
+            zone = ZoneInfo(candidate)
+        except (ZoneInfoNotFoundError, ValueError):
+            continue
+        if candidate != requested:
+            logger.warning(
+                "Fuseau horaire %r inconnu, repli sur %s", requested, candidate
+            )
+        return zone
+    logger.warning(
+        "Aucune base de fuseaux disponible (tzdata manquant ?), repli sur UTC"
+    )
+    return timezone.utc
 
 
 def today_in(tz: str | None) -> date:
