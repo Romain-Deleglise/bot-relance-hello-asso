@@ -42,12 +42,20 @@ def load_env_file(path: str | os.PathLike[str]) -> None:
         key, _, value = line.partition("=")
         key = key.strip()
         value = value.strip()
-        # Valeur non quotée : couper un éventuel commentaire de fin de ligne.
-        if value[:1] not in ('"', "'"):
+        if value[:1] in ('"', "'"):
+            # Valeur entre guillemets : contenu pris tel quel (les guillemets
+            # protègent tout, y compris « # » et espaces), le reste de la ligne
+            # (commentaire éventuel après le guillemet fermant) est ignoré.
+            quote = value[0]
+            end = value.find(quote, 1)
+            value = value[1:end] if end != -1 else value[1:]
+        else:
+            # Valeur non quotée : couper un éventuel commentaire de fin de ligne
+            # (« # » précédé d'une espace). Une valeur contenant réellement «  # »
+            # doit être entourée de guillemets.
             hash_pos = value.find(" #")
             if hash_pos != -1:
                 value = value[:hash_pos].rstrip()
-        value = value.strip('"').strip("'")
         os.environ.setdefault(key, value)
 
 

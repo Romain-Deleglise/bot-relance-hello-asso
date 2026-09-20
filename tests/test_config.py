@@ -33,6 +33,15 @@ def test_load_env_preserve_un_diese_dans_une_valeur_quotee(tmp_path, monkeypatch
     assert os.environ["SMTP_PASSWORD"] == "ab #cd#ef"
 
 
+def test_load_env_valeur_quotee_suivie_d_un_commentaire(tmp_path, monkeypatch):
+    """KEY="valeur" # note → la valeur est prise sans le commentaire ni les guillemets."""
+    monkeypatch.delenv("SMTP_PASSWORD", raising=False)
+    env = tmp_path / ".env"
+    env.write_text('SMTP_PASSWORD="s3cr3t #avec espace" # commentaire\n', encoding="utf-8")
+    load_env_file(env)
+    assert os.environ["SMTP_PASSWORD"] == "s3cr3t #avec espace"
+
+
 def test_load_env_preserve_un_diese_colle_sans_espace(tmp_path, monkeypatch):
     """Un « # » collé à la valeur (sans espace avant) n'est pas un commentaire."""
     monkeypatch.delenv("SMTP_PASSWORD", raising=False)
