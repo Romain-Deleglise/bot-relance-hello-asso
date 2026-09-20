@@ -19,12 +19,12 @@ from relance_adhesions.state import ReminderStore  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def make_membership():
+def make_membership(amount_cents=2500):
     return Membership(
         item_id=42, order_id=7, order_date=date(2025, 3, 10), end_date=date(2026, 3, 10),
         first_name="Jean", last_name="Dupont", email="jean@example.org",
         tier_name="Adhésion annuelle", form_slug="adhesion", form_type="Membership",
-        validity_type="MovingYear",
+        validity_type="MovingYear", amount_cents=amount_cents,
     )
 
 
@@ -43,7 +43,7 @@ def make_config():
         template_html=str(ROOT / "templates/relance.html"),
         template_text_expiration=str(ROOT / "templates/relance-expiration.txt"),
         template_html_expiration=str(ROOT / "templates/relance-expiration.html"),
-        mail_subject_expiration="Votre adhésion à $association expire aujourd'hui",
+        mail_subject_expiration="Il est encore temps de renouveler votre adhésion à $association",
     )
 
 
@@ -74,11 +74,24 @@ def test_store_journal_execution(tmp_path):
 def test_rendu_du_mail():
     rendered = MailRenderer(make_config()).render(make_reminder())
     assert rendered.subject == "Votre adhésion à Pause IA arrive à échéance"
-    assert "Jean Dupont" in rendered.text
+    assert "Jean" in rendered.text
     assert "10/03/2026" in rendered.text
     assert "https://example.org/adhesion" in rendered.text
+    # Le montant est injecté dans le préavis.
+    assert "d'un montant de 25 €" in rendered.text
     assert rendered.html and "Renouveler mon adhésion" in rendered.html
     # Aucune variable de template non substituée.
+    assert "$" not in rendered.text
+
+
+def test_montant_inconnu_ne_laisse_pas_de_mention_bancale():
+    """Sans montant, la clause parenthétique disparaît proprement."""
+    from relance_adhesions.membership import Reminder
+
+    config = make_config()
+    reminder = Reminder(make_membership(amount_cents=None), STAGE_PREAVIS)
+    rendered = MailRenderer(config).render(reminder)
+    assert "montant" not in rendered.text  # pas de « (d'un montant de ) »
     assert "$" not in rendered.text
 
 
@@ -88,7 +101,8 @@ def test_les_deux_etapes_ont_des_textes_distincts():
     expiration = renderer.render(make_reminder(STAGE_EXPIRATION))
     assert preavis.subject != expiration.subject
     assert preavis.text != expiration.text
-    assert "aujourd'hui" in expiration.subject
+    # Le mail d'expiration parle bien d'une adhésion déjà expirée.
+    assert "a expiré" in expiration.text
     assert "$" not in expiration.text
 
 
@@ -102,6 +116,119 @@ def test_construction_du_message():
     assert message["To"] == "Jean Dupont <jean@example.org>"
     assert message["From"] == "Pause IA <adhesions@example.org>"
     assert message.is_multipart()
+
+
+def test_mode_test_redirige_tous_les_mails_vers_une_seule_adresse():
+    """MAIL_REDIRECT_TO : To redirigé, vrai destinataire rappelé, pas de Bcc."""
+    config = make_config()
+    config.mail_redirect_to = "moi@example.org"
+    config.mail_bcc = "archive@example.org"
+    message = SmtpMailer(config).build_message(
+        make_membership(), MailRenderer(config).render(make_reminder())
+    )
+    assert message["To"] == "Jean Dupont <moi@example.org>"
+    assert message["X-Original-Recipient"] == "jean@example.org"
+    assert message["Subject"].startswith("[TEST → jean@example.org]")
+    # En mode test, pas de copie cachée (le mail part déjà vers l'adresse de test).
+    assert message["Bcc"] is None
+
+
+def test_message_porte_les_entetes_de_delivrabilite():
+    """Message-ID, Date et List-Unsubscribe présents et cohérents."""
+    config = make_config()
+    reminder = make_reminder()
+    message = SmtpMailer(config).build_message(
+        reminder.membership, MailRenderer(config).render(reminder)
+    )
+    assert message["Date"]
+    message_id = message["Message-ID"]
+    assert message_id and message_id.startswith("<") and "example.org>" in message_id
+    # À défaut d'adresse dédiée, List-Unsubscribe retombe sur l'expéditeur.
+    assert message["List-Unsubscribe"] == "<mailto:adhesions@example.org?subject=Desabonnement>"
+
+
+def test_list_unsubscribe_utilise_l_adresse_dediee_si_fournie():
+    config = make_config()
+    config.unsubscribe_email = "stop@example.org"
+    message = SmtpMailer(config).build_message(
+        make_membership(), MailRenderer(config).render(make_reminder())
+    )
+    assert message["List-Unsubscribe"] == "<mailto:stop@example.org?subject=Desabonnement>"
+
+
+def test_smtp_reessaie_sur_rejet_temporaire_puis_reussit():
+    """Un rejet 4xx (greylisting) est réessayé ; l'envoi finit par passer."""
+    import smtplib
+
+    config = make_config()
+    config.smtp_retry_attempts = 3
+    config.smtp_retry_delay_seconds = 0  # pas d'attente réelle en test
+    config.smtp_delay_seconds = 0
+
+    class FlakyServer:
+        def __init__(self):
+            self.calls = 0
+
+        def send_message(self, message):
+            self.calls += 1
+            if self.calls == 1:
+                raise smtplib.SMTPResponseException(451, b"greylisted, try again")
+
+    mailer = SmtpMailer(config)
+    server = FlakyServer()
+    mailer._connect = lambda: server  # court-circuite la vraie connexion
+    mailer.send(make_reminder(), MailRenderer(config).render(make_reminder()))
+    assert server.calls == 2  # un échec temporaire, puis succès
+
+
+def test_service_mail_injoignable_leve_une_erreur_dediee():
+    """Connexion SMTP impossible → MailConnectionError (et non MailError simple)."""
+    from relance_adhesions.mailer import MailConnectionError
+
+    config = make_config()
+    config.smtp_retry_attempts = 2
+    config.smtp_retry_delay_seconds = 0
+    config.smtp_delay_seconds = 0
+
+    def refuse_connexion():
+        raise MailConnectionError("SES injoignable")
+
+    mailer = SmtpMailer(config)
+    mailer._connect = refuse_connexion
+    try:
+        mailer.send(make_reminder(), MailRenderer(config).render(make_reminder()))
+    except MailConnectionError:
+        return
+    raise AssertionError("MailConnectionError attendue quand le service est down")
+
+
+def test_smtp_ne_reessaie_pas_un_rejet_definitif():
+    """Un rejet 5xx (adresse invalide) échoue immédiatement, sans retry."""
+    import smtplib
+
+    from relance_adhesions.mailer import MailError
+
+    config = make_config()
+    config.smtp_retry_delay_seconds = 0
+    config.smtp_delay_seconds = 0
+
+    class RejectingServer:
+        def __init__(self):
+            self.calls = 0
+
+        def send_message(self, message):
+            self.calls += 1
+            raise smtplib.SMTPResponseException(550, b"mailbox unavailable")
+
+    mailer = SmtpMailer(config)
+    server = RejectingServer()
+    mailer._connect = lambda: server
+    try:
+        mailer.send(make_reminder(), MailRenderer(config).render(make_reminder()))
+    except MailError:
+        assert server.calls == 1
+        return
+    raise AssertionError("MailError attendue sur un rejet 5xx")
 
 
 def test_dry_run_ecrit_les_mails_sur_disque(tmp_path):
@@ -124,7 +251,7 @@ def test_dry_run_ecrit_les_mails_sur_disque(tmp_path):
     texte = (tmp_path / "mails" / "001-preavis-jean@example.org.txt").read_text(
         encoding="utf-8"
     )
-    assert "Jean Dupont" in texte and "10/03/2026" in texte
+    assert "Jean" in texte and "10/03/2026" in texte
     eml = (tmp_path / "mails" / "001-preavis-jean@example.org.eml").read_text(
         encoding="utf-8"
     )

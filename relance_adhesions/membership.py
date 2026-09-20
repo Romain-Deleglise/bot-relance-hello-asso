@@ -24,14 +24,51 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .helloasso import VALIDITY_CUSTOM, VALIDITY_ILLIMITED, VALIDITY_MOVING_YEAR
 
 logger = logging.getLogger(__name__)
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+# Fuseau de référence pour toute la logique de dates. HelloAsso renvoie les
+# dates de commande en UTC ; les convertir dans le fuseau de l'association avant
+# d'en extraire le jour évite qu'une commande passée tard le soir (heure de
+# Paris) ne soit datée de la veille, ce qui décalerait l'échéance d'un jour.
+DEFAULT_TIMEZONE = "Europe/Paris"
+
+
+def resolve_timezone(name: str | None) -> tzinfo:
+    """Renvoie le fuseau demandé. Ne lève jamais : repli Paris puis UTC.
+
+    Sur un hôte sans base de fuseaux (image Docker « slim » sans `tzdata`),
+    `ZoneInfo` échoue pour *tout* nom, y compris Europe/Paris. On retombe alors
+    sur UTC plutôt que de laisser l'exception interrompre l'exécution — mieux
+    vaut un calcul de dates à ±2 h qu'un bot qui ne tourne pas du tout.
+    """
+    requested = name or DEFAULT_TIMEZONE
+    for candidate in (requested, DEFAULT_TIMEZONE):
+        try:
+            zone = ZoneInfo(candidate)
+        except (ZoneInfoNotFoundError, ValueError):
+            continue
+        if candidate != requested:
+            logger.warning(
+                "Fuseau horaire %r inconnu, repli sur %s", requested, candidate
+            )
+        return zone
+    logger.warning(
+        "Aucune base de fuseaux disponible (tzdata manquant ?), repli sur UTC"
+    )
+    return timezone.utc
+
+
+def today_in(tz: str | None) -> date:
+    """Date du jour dans le fuseau de l'association (et non celui du serveur)."""
+    return datetime.now(resolve_timezone(tz)).date()
 
 
 @dataclass
@@ -49,10 +86,22 @@ class Membership:
     form_slug: str
     form_type: str
     validity_type: str
+    amount_cents: int | None = None
 
     @property
     def full_name(self) -> str:
         return " ".join(part for part in (self.first_name, self.last_name) if part).strip()
+
+    @property
+    def amount_str(self) -> str:
+        """Montant de la cotisation en euros (ex. « 25 € », « 25,50 € »).
+
+        HelloAsso exprime les montants en centimes. Chaîne vide si inconnu.
+        """
+        if self.amount_cents is None:
+            return ""
+        euros, cents = divmod(int(self.amount_cents), 100)
+        return f"{euros} €" if cents == 0 else f"{euros},{cents:02d} €"
 
     @property
     def display_name(self) -> str:
@@ -120,8 +169,19 @@ def parse_datetime(value: Any) -> datetime | None:
 
 
 def parse_date(value: Any) -> date | None:
+    """Jour d'une date ISO 8601, en UTC (suffisant pour une date sans heure)."""
     parsed = parse_datetime(value)
     return parsed.date() if parsed else None
+
+
+def parse_local_date(value: Any, tz: str | None = DEFAULT_TIMEZONE) -> date | None:
+    """Jour d'une date/heure ISO 8601, exprimé dans le fuseau `tz`.
+
+    À utiliser pour la date de commande, dont l'heure compte : une commande à
+    23 h 30 heure de Paris est datée du bon jour, pas de la veille en UTC.
+    """
+    parsed = parse_datetime(value)
+    return parsed.astimezone(resolve_timezone(tz)).date() if parsed else None
 
 
 def add_one_year(start: date) -> date:
@@ -176,10 +236,11 @@ def normalize_item(
     validity_type: str,
     form_end_date: date | None,
     duration_days: int,
+    tz: str | None = DEFAULT_TIMEZONE,
 ) -> Membership | None:
     """Transforme un item HelloAsso en `Membership`. `None` si inexploitable."""
     order = item.get("order") or {}
-    order_date = parse_date(order.get("date"))
+    order_date = parse_local_date(order.get("date"), tz)
     if order_date is None:
         logger.warning("Item %s ignoré : date de commande absente", item.get("id"))
         return None
@@ -197,6 +258,12 @@ def normalize_item(
     first_name = (user.get("firstName") or payer.get("firstName") or "").strip()
     last_name = (user.get("lastName") or payer.get("lastName") or "").strip()
 
+    # Montant de l'item, en centimes chez HelloAsso. À utiliser dans les mails
+    # (« cotisation de X € »). Unité à vérifier sur un dump réel avant tout
+    # envoi (cf. SUIVI 6.3) : le montant doit s'afficher « 25 € », pas « 2500 € ».
+    raw_amount = item.get("amount")
+    amount_cents = int(raw_amount) if isinstance(raw_amount, (int, float)) else None
+
     return Membership(
         item_id=int(item.get("id") or 0),
         order_id=order.get("id"),
@@ -209,22 +276,44 @@ def normalize_item(
         form_slug=(order.get("formSlug") or "").strip(),
         form_type=(order.get("formType") or "Membership").strip(),
         validity_type=validity_type,
+        amount_cents=amount_cents,
     )
 
 
-def keep_latest_per_member(memberships: list[Membership]) -> list[Membership]:
-    """Ne conserve que l'adhésion la plus récente par adresse e-mail.
+def _person_key(membership: Membership) -> tuple[str, str]:
+    """Identité d'un adhérent : e-mail + nom normalisés (option c).
 
-    Sans ce filtre, une personne adhérente depuis trois ans recevrait une
-    relance pour chacune de ses anciennes adhésions expirées.
+    Le nom est mis en minuscules et ses espaces multiples réduits, pour que
+    « Jean  DUPONT » et « jean dupont » désignent bien la même personne.
     """
-    latest: dict[str, Membership] = {}
+    name = re.sub(r"\s+", " ", membership.full_name).strip().lower()
+    return (membership.email.lower(), name)
+
+
+def dedupe_memberships(memberships: list[Membership]) -> list[Membership]:
+    """Ne conserve que l'adhésion la plus récente par personne — option (c).
+
+    La clé est `(e-mail, nom)`, et non l'e-mail seul :
+
+    * deux personnes partageant une même adresse (un même payeur réglant pour un
+      couple ou un enfant) sont **distinguées** et relancées chacune ;
+    * les adhésions successives d'une **même** personne sont fusionnées : seule
+      la plus récente est gardée. Un adhérent qui renouvelle — même en avance —
+      n'est donc jamais relancé pour son ancienne échéance déjà remplacée.
+
+    Compromis assumé : deux personnes homonymes partageant une adresse (rare)
+    seraient fusionnées. C'est préférable au risque inverse (relancer quelqu'un
+    qui vient de renouveler), qui serait perçu comme une erreur.
+    """
+    latest: dict[tuple[str, str], Membership] = {}
     for membership in memberships:
-        key = membership.email.lower()
+        key = _person_key(membership)
         current = latest.get(key)
         if current is None or membership.order_date > current.order_date:
             latest[key] = membership
-    return sorted(latest.values(), key=lambda m: (m.end_date or date.max, m.email))
+    return sorted(
+        latest.values(), key=lambda m: (m.end_date or date.max, m.email, m.item_id)
+    )
 
 
 def select_to_remind(
@@ -237,12 +326,16 @@ def select_to_remind(
 
     * `preavis`     : l'échéance est à venir, dans les `days_before` jours —
                       fenêtre `]today ; today + days_before]`.
-    * `expiration`  : l'échéance est atteinte ou tout juste dépassée —
-                      fenêtre `[today - days_after ; today]`.
+    * `expiration`  : l'échéance est **déjà passée**, depuis au plus `days_after`
+                      jours — fenêtre `[today - days_after ; today[` (borne haute
+                      exclue).
 
-    Les deux fenêtres sont disjointes par construction (la date du jour
-    appartient à la seconde), de sorte qu'une même adhésion ne peut pas
-    déclencher les deux relances le même jour.
+    La borne haute exclue est délibérée : le mail d'expiration ne part donc
+    jamais le jour J, mais seulement à partir du lendemain de l'échéance. Ainsi
+    la formulation « votre adhésion a expiré le … » est toujours exacte au moment
+    de l'envoi. Les deux fenêtres restent disjointes (le jour de l'échéance
+    n'appartient à aucune des deux : le préavis a déjà été envoyé avant, le mail
+    d'expiration partira après), donc jamais deux mails le même jour.
     """
     preavis_end = today + timedelta(days=days_before)
     expiration_start = today - timedelta(days=days_after)
@@ -254,7 +347,7 @@ def select_to_remind(
             continue
         if today < end_date <= preavis_end:
             reminders.append(Reminder(membership, STAGE_PREAVIS))
-        elif expiration_start <= end_date <= today:
+        elif expiration_start <= end_date < today:
             reminders.append(Reminder(membership, STAGE_EXPIRATION))
 
     # Les échéances les plus urgentes d'abord.

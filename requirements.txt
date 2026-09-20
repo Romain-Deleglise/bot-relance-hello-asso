@@ -1,1 +1,4 @@
 requests>=2.28,<3
+# Base de fuseaux horaires IANA pour zoneinfo : indispensable sur les images
+# Docker « slim » et les hôtes minimaux, qui n'embarquent pas tzdata système.
+tzdata>=2024.1

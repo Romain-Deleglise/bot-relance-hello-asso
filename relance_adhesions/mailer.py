@@ -16,9 +16,10 @@ import logging
 import re
 import smtplib
 import ssl
+import time
 from dataclasses import dataclass
 from email.message import EmailMessage
-from email.utils import formataddr
+from email.utils import formataddr, formatdate, make_msgid
 from pathlib import Path
 from string import Template
 
@@ -34,7 +35,16 @@ logger = logging.getLogger(__name__)
 
 
 class MailError(Exception):
-    """Échec d'envoi d'un mail."""
+    """Échec d'envoi d'un mail (rejet propre à un destinataire)."""
+
+
+class MailConnectionError(MailError):
+    """Le service de mail est injoignable (connexion/authentification SMTP).
+
+    Distinct de `MailError` : ce n'est pas le rejet d'un destinataire mais une
+    panne du canal d'envoi. L'orchestration doit alors interrompre le batch et
+    déclencher une alerte, plutôt que d'échouer sur chaque destinataire.
+    """
 
 
 def _format_fr_date(value) -> str:
@@ -59,8 +69,10 @@ class MailRenderer:
 
     Les templates sont des fichiers séparés du code, éditables sans toucher au
     Python. Variables disponibles :
-    `$nom`, `$prenom`, `$nom_complet`, `$email`, `$date_fin`, `$date_adhesion`,
-    `$formule`, `$association`, `$lien_adhesion`.
+    `$nom`, `$prenom` (repli sur le nom complet si absent), `$nom_complet`,
+    `$email`, `$date_fin`, `$date_adhesion`, `$formule`, `$montant` (ex. « 25 € »),
+    `$mention_montant` (clause « (d'un montant de 25 €) », vide si inconnu),
+    `$association`, `$lien_adhesion`.
     """
 
     def __init__(self, config: Config) -> None:
@@ -92,16 +104,29 @@ class MailRenderer:
         return file.read_text(encoding="utf-8")
 
     def context(self, membership: Membership) -> dict[str, str]:
+        montant = membership.amount_str
         return {
             "nom": membership.last_name,
-            "prenom": membership.first_name,
+            # Prénom avec repli : jamais « Bonjour , » si l'API n'a pas de prénom.
+            "prenom": membership.first_name or membership.display_name,
             "nom_complet": membership.display_name,
             "email": membership.email,
             "date_fin": _format_fr_date(membership.end_date),
             "date_adhesion": _format_fr_date(membership.order_date),
             "formule": membership.tier_name,
+            "montant": montant,
+            # Clause parenthétique prête à l'emploi : disparaît proprement si le
+            # montant est inconnu (évite un « (d'un montant de ) » bancal).
+            "mention_montant": f" (d'un montant de {montant})" if montant else "",
             "association": self.config.association_name,
             "lien_adhesion": self.config.renewal_url,
+            # Adresse pour le lien « Se désinscrire » du pied de page (même
+            # logique que l'en-tête List-Unsubscribe).
+            "email_desinscription": (
+                self.config.unsubscribe_email
+                or self.config.mail_reply_to
+                or self.config.mail_from
+            ),
         }
 
     def render(self, reminder: Reminder) -> RenderedMail:
@@ -121,12 +146,33 @@ def build_message(
 ) -> EmailMessage:
     """Assemble le message final (texte + HTML alternatif)."""
     message = EmailMessage()
-    message["Subject"] = mail.subject
+    # Mode TEST : tout est redirigé vers une seule adresse, le vrai destinataire
+    # est rappelé dans le sujet et un en-tête, et la copie cachée est désactivée.
+    redirect = config.mail_redirect_to
+    message["Subject"] = f"[TEST → {membership.email}] {mail.subject}" if redirect else mail.subject
     message["From"] = formataddr((config.mail_from_name or None, config.mail_from))
-    message["To"] = formataddr((membership.full_name or None, membership.email))
+    if redirect:
+        message["To"] = formataddr((membership.full_name or None, redirect))
+        message["X-Original-Recipient"] = membership.email
+    else:
+        message["To"] = formataddr((membership.full_name or None, membership.email))
+    # `Date` et `Message-ID` explicites : leur absence pénalise la délivrabilité
+    # (filtres anti-spam) et casse le fil de discussion côté client. On les pose
+    # nous-mêmes plutôt que de compter sur le serveur d'envoi, et pour que les
+    # `.eml` produits en dry-run soient des messages complets.
+    message["Date"] = formatdate(localtime=True)
+    domain = config.mail_from.rpartition("@")[2] or None
+    message["Message-ID"] = make_msgid(domain=domain)
     if config.mail_reply_to:
         message["Reply-To"] = config.mail_reply_to
-    if config.mail_bcc:
+    # List-Unsubscribe (mailto) : améliore la délivrabilité et laisse un moyen
+    # simple de se désinscrire. Pas de variante « One-Click » HTTP, qui exigerait
+    # un endpoint web dédié.
+    unsubscribe = config.unsubscribe_email or config.mail_reply_to or config.mail_from
+    if unsubscribe:
+        message["List-Unsubscribe"] = f"<mailto:{unsubscribe}?subject=Desabonnement>"
+    # Pas de copie cachée en mode test (le message part déjà vers l'adresse de test).
+    if config.mail_bcc and not redirect:
         message["Bcc"] = config.mail_bcc
     message.set_content(mail.text)
     if mail.html:
@@ -140,6 +186,7 @@ class SmtpMailer:
     def __init__(self, config: Config) -> None:
         self.config = config
         self._server: smtplib.SMTP | smtplib.SMTP_SSL | None = None
+        self._sent_count = 0
 
     def __enter__(self) -> "SmtpMailer":
         return self
@@ -164,28 +211,92 @@ class SmtpMailer:
             if cfg.smtp_user:
                 server.login(cfg.smtp_user, cfg.smtp_password)
         except (smtplib.SMTPException, OSError) as exc:
-            raise MailError(f"Connexion SMTP impossible ({cfg.smtp_host}:{cfg.smtp_port}) : {exc}") from exc
+            raise MailConnectionError(
+                f"Connexion SMTP impossible ({cfg.smtp_host}:{cfg.smtp_port}) : {exc}"
+            ) from exc
         self._server = server
         return server
 
     def build_message(self, membership: Membership, mail: RenderedMail) -> EmailMessage:
         return build_message(self.config, membership, mail)
 
+    @staticmethod
+    def _is_transient(exc: Exception) -> bool:
+        """Un rejet SMTP 4xx (greylisting, throttling) est réessayable."""
+        code = getattr(exc, "smtp_code", None)
+        if isinstance(code, int) and 400 <= code < 500:
+            return True
+        recipients = getattr(exc, "recipients", None)
+        if recipients:
+            codes = [c for c, _ in recipients.values()]
+            return bool(codes) and all(400 <= c < 500 for c in codes)
+        return False
+
+    def _pace(self) -> None:
+        """Temporise avant un envoi (sauf le premier) et reconnecte au besoin."""
+        if self._sent_count == 0:
+            return
+        if self.config.smtp_delay_seconds > 0:
+            time.sleep(self.config.smtp_delay_seconds)
+        every = self.config.smtp_max_per_connection
+        if every and self._sent_count % every == 0:
+            logger.debug("Reconnexion SMTP après %s envois", self._sent_count)
+            self.close()
+
     def send(self, reminder: Reminder, mail: RenderedMail) -> None:
         membership = reminder.membership
         message = self.build_message(membership, mail)
-        try:
-            self._connect().send_message(message)
-        except (smtplib.SMTPServerDisconnected, smtplib.SMTPConnectError):
-            # Une déconnexion en cours de série ne doit pas perdre le reste.
-            logger.warning("Connexion SMTP perdue, reconnexion")
-            self._server = None
+
+        self._pace()
+
+        attempts = max(1, self.config.smtp_retry_attempts)
+        delay = self.config.smtp_retry_delay_seconds
+        last_error: Exception | None = None
+        connection_failure = False
+
+        for attempt in range(1, attempts + 1):
+            connection_failure = False
             try:
                 self._connect().send_message(message)
+                self._sent_count += 1
+                return
+            except MailConnectionError as exc:
+                # Le canal d'envoi est injoignable (connexion/login SMTP).
+                self._server = None
+                last_error = exc
+                connection_failure = True
+            except (smtplib.SMTPServerDisconnected, smtplib.SMTPConnectError) as exc:
+                # Déconnexion en cours de série : on repart sur une connexion neuve.
+                logger.warning("Connexion SMTP perdue, reconnexion (%s)", exc)
+                self._server = None
+                last_error = exc
+                connection_failure = True
             except (smtplib.SMTPException, OSError) as exc:
-                raise MailError(f"Envoi à {membership.email} impossible : {exc}") from exc
-        except (smtplib.SMTPException, OSError) as exc:
-            raise MailError(f"Envoi à {membership.email} impossible : {exc}") from exc
+                if not self._is_transient(exc):
+                    raise MailError(
+                        f"Envoi à {membership.email} impossible : {exc}"
+                    ) from exc
+                # Rejet temporaire (4xx) : on repart au propre et on réessaie.
+                self._server = None
+                last_error = exc
+
+            if attempt < attempts:
+                logger.warning(
+                    "Envoi à %s : échec temporaire, nouvel essai %s/%s dans %.0f s (%s)",
+                    membership.email, attempt + 1, attempts, delay, last_error,
+                )
+                time.sleep(delay)
+                delay *= 2
+
+        # Après épuisement des tentatives : distinguer une panne du service
+        # (à remonter comme telle pour alerte) d'un simple rejet destinataire.
+        if connection_failure:
+            raise MailConnectionError(
+                f"Service de mail injoignable après {attempts} essais : {last_error}"
+            )
+        raise MailError(
+            f"Envoi à {membership.email} impossible après {attempts} essais : {last_error}"
+        )
 
     def close(self) -> None:
         if self._server is not None:
