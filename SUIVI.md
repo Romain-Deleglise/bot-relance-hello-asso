@@ -35,7 +35,7 @@ Deux relances par échéance :
 | Récupération des adhésions | **Vérifiée sur l'API réelle** |
 | Calcul des échéances | Vérifié sur données réelles, cohérent avec l'export CSV |
 | Pagination | **Confirmée sur l'API réelle** le 20/09/2026 — 198 items analysés (voir 6.1) |
-| Paiements mensuels (6.2) | **Tranché** : pas d'auto-renouvellement, relance justifiée (confiance ~95 %, cf. 6.2) |
+| Paiements mensuels (6.2) | **Confirmé (100 %)** : formulaire verrouillé en Année glissante, pas d'auto-renouvellement — le mail est le seul mécanisme de relance |
 | Envoi de mails | **Jamais testé** — aucun SMTP configuré à ce jour |
 | Mise en cron | Non faite |
 | Textes des mails | Fonctionnels mais à retravailler — **volontairement traités en dernier** (décision Romain 20/09) |
@@ -242,12 +242,14 @@ Sources : blog HelloAsso « Durée de validité et renouvellement des cotisation
 centre d'aide « paiement en plusieurs fois », blog « votre outil de paiement des
 adhésions évolue ».
 
-**Réserve honnête :** les pages HelloAsso n'ont pas pu être lues directement
-(bloquées par le proxy réseau lors de la vérification) ; la conclusion s'appuie
-sur des résumés de recherche + la donnée API mesurée. Vérification définitive à
-30 s, côté Romain, dans l'admin HelloAsso : si l'option du formulaire s'appelle
-**« paiement en plusieurs fois »** (et non « adhésion mensuelle / renouvellement
-automatique »), c'est confirmé à 100 %.
+**Vérification définitive faite le 20/09/2026 (capture de l'admin HelloAsso) :**
+le formulaire « Formulaire d'adhésion à Pause IA » est en **Période d'adhésion =
+Année glissante**, désormais **verrouillée** (« Des paiements ont déjà été
+effectués sur cette campagne. La période d'adhésion et l'adresse web ne peuvent
+plus être modifiées. »). C'est donc bien une adhésion à échéance fixe sans
+reconduction tacite. Confiance portée à **100 %**. Le système de mail de ce
+projet est le seul mécanisme de relance possible ; HelloAsso ne relancera jamais
+ces adhérents automatiquement.
 
 Effet de calendrier à garder en tête pour les textes (6.3) : avec un paiement
 étalé sur douze mois, le préavis à J-15 arrive entre l'avant-dernière et la
