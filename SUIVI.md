@@ -36,7 +36,8 @@ Deux relances par échéance :
 | Calcul des échéances | Vérifié sur données réelles, cohérent avec l'export CSV |
 | Pagination | **Confirmée sur l'API réelle** le 20/09/2026 — 198 items analysés (voir 6.1) |
 | Paiements mensuels (6.2) | **Confirmé (100 %)** : formulaire verrouillé en Année glissante, pas d'auto-renouvellement — le mail est le seul mécanisme de relance |
-| Envoi de mails | **Jamais testé** — aucun SMTP configuré à ce jour |
+| Robustesse | **Audit fait + correctifs appliqués** (voir 6.7) : en-têtes de délivrabilité, retry SMTP, fuseau, déduplication par personne |
+| Envoi de mails | Canal retenu : **AWS SES (SMTP)** — reste à renseigner `.env` et vérifier région / production access / SPF-DKIM (voir 6.4). Jamais testé en réel à ce jour |
 | Mise en cron | Non faite |
 | Textes des mails | Fonctionnels mais à retravailler — **volontairement traités en dernier** (décision Romain 20/09) |
 
@@ -264,26 +265,55 @@ reste soit stabilisé — d'autant qu'il dépend de la réponse au point 6.2.
 
 Demande explicite de Romain : les quatre templates (`templates/relance.txt`,
 `relance.html`, `relance-expiration.txt`, `relance-expiration.html`) sont
-fonctionnels mais pas aboutis.
+fonctionnels mais pas aboutis. Romain a fourni deux textes de référence (ton
+chaleureux, argument de l'indépendance, sans mention SEPA) à intégrer ici.
 
 Variables disponibles : `$nom`, `$prenom`, `$nom_complet`, `$email`,
 `$date_fin`, `$date_adhesion`, `$formule`, `$association`, `$lien_adhesion`.
 Syntaxe `string.Template`, également utilisable dans `MAIL_SUBJECT` et
 `MAIL_SUBJECT_EXPIRATION`.
 
-### 6.4 Configurer l'envoi de mails
+**Point de timing à trancher en même temps que les textes.** Le second mail
+proposé dit « votre adhésion **a expiré** le `$date_fin` ». Pour que ce soit
+toujours vrai, l'étape `expiration` doit partir **après** l'échéance, pas le
+jour J. Or la fenêtre actuelle `[today - days_after ; today]` déclenche le mail
+**le jour même** de l'échéance (« expire aujourd'hui »). Deux options quand on
+fera les textes : (a) adapter le texte du jour J (« expire aujourd'hui ») ; ou
+(b) introduire un décalage pour que le second mail parte N jours après
+l'échéance (ex. J+15), ce qui colle au texte « a expiré ». À décider avec les
+templates ; ne rien changer à la logique de dates avant.
 
-Canal non encore choisi. Le code utilise SMTP (variables `SMTP_*`), ce qui
-couvre aussi bien un serveur d'association qu'un relais transactionnel (Brevo,
-Mailjet, Sendgrid exposent tous un endpoint SMTP). Pour passer à une API HTTP,
-écrire dans `mailer.py` une classe exposant `send(reminder, rendered_mail)` et
-la substituer à `SmtpMailer` dans `cli.py`.
+### 6.4 Configurer l'envoi de mails — canal retenu : AWS SES (SMTP)
 
-Vérifier que `MAIL_FROM` est autorisée à émettre pour le domaine (SPF / DKIM),
-sans quoi les relances partiront en spam.
+**Décision 20/09/2026 : on utilise le compte AWS SES existant de Pause IA**
+(compte SES `CiviCRM_Mail`, expéditeur `contact@pauseia.fr`). SES expose un
+endpoint SMTP standard : **aucun code à écrire**, tout passe par la config
+`SMTP_*` (voir le bloc SES commenté dans `.env.example`).
+
+Prérequis :
+
+1. **Production access + expéditeur vérifié (SPF/DKIM)** — **confirmés** : le
+   compte SES sert déjà CiviCRM en production depuis `contact@pauseia.fr`.
+2. **Région** — le endpoint est `email-smtp.<région>.amazonaws.com`. **Recopier
+   le `SMTP_HOST` déjà utilisé par CiviCRM** : les identifiants SMTP SES sont
+   liés à une région (le mot de passe est dérivé de la clé IAM *et* de la
+   région), donc le mot de passe existant n'authentifie que dans la région de
+   CiviCRM. Même host + mêmes identifiants = même région garantie. Inutile de
+   tester à l'aveugle.
+
+Identifiants (nom d'utilisateur SMTP `AKIA…`, mot de passe SMTP SES) : **dans
+`.env` uniquement** (`chmod 600`, gitignoré). Jamais dans le code, un commit ou
+un échange. Le mot de passe SMTP SES n'est PAS le secret access key IAM.
+
+Débit : SES tolère 14 msg/s en production ; `SMTP_DELAY_SECONDS=1` (défaut)
+laisse une marge très large pour ~30 relances.
 
 Premier envoi réel recommandé : `MAX_EMAILS_PER_RUN=5` et l'adresse de Romain
 en `MAIL_BCC`.
+
+Pour passer plus tard à l'API HTTP SES (v2) plutôt qu'au SMTP : écrire dans
+`mailer.py` une classe exposant `send(reminder, rendered_mail)` et la substituer
+à `SmtpMailer` dans `cli.py`. Non nécessaire tant que le SMTP suffit.
 
 ### 6.5 Mise en production
 
@@ -297,9 +327,46 @@ Les volumes `data/` (base anti-doublon) et `logs/` doivent être persistés.
 
 ### 6.6 Administratif
 
-Le dépôt était vide à la création : la **branche par défaut pointe encore sur
-la branche de travail** au lieu de `main`. À corriger dans Settings → Branches
-avant de fusionner la PR.
+Le dépôt était vide à la création : après le merge de la PR #1, `main` existe et
+porte le code, mais la **branche par défaut du dépôt pointe encore sur
+`claude/helloasso-membership-renewal-f6j7l0`** au lieu de `main`. À corriger
+dans Settings → Branches côté GitHub (réglage non modifiable par le script).
+
+---
+
+### 6.7 Audit de robustesse et correctifs appliqués (20/09/2026, après-midi)
+
+Audit en lecture seule du cœur du code, puis correctifs. Ce qui était déjà
+solide (pagination, retries/backoff réseau, refresh token sur 401, garde-fous
+anti-campagne, écriture en base après envoi, `safe_substitute`, gestion Bcc
+sans fuite) n'a pas été touché. Correctifs :
+
+* **H1 — En-têtes de délivrabilité.** `build_message` pose désormais `Date` et
+  `Message-ID` explicites (leur absence pénalise l'anti-spam et casse le
+  threading ; `smtplib` ajoutait `Date` mais pas `Message-ID`).
+* **H2 — Erreur SQLite après envoi.** `mark_sent` est désormais protégé : une
+  écriture anti-doublon qui échoue est signalée sans interrompre le batch (avant,
+  elle plantait toute l'exécution et provoquait un renvoi au passage suivant).
+* **H3 — Cadence d'envoi.** Temporisation configurable entre messages
+  (`SMTP_DELAY_SECONDS`, 1 s) + reconnexion périodique optionnelle
+  (`SMTP_MAX_PER_CONNECTION`).
+* **H4 — Retry sur rejet temporaire.** Un rejet SMTP 4xx (greylisting,
+  throttling) est réessayé avec backoff (`SMTP_RETRY_ATTEMPTS`,
+  `SMTP_RETRY_DELAY_SECONDS`) ; un 5xx échoue immédiatement.
+* **D1 (option c) — Déduplication par personne.** `dedupe_memberships` clé sur
+  `(e-mail, nom)` et non l'e-mail seul : deux personnes partageant une adresse
+  (même payeur) sont relancées chacune, et les adhésions successives d'une même
+  personne sont fusionnées (plus de relance après renouvellement, même anticipé).
+* **D2 — Fuseau horaire.** Tout le calcul de dates est ancré sur
+  `RELANCE_TIMEZONE` (défaut `Europe/Paris`) : plus de décalage d'un jour dû à
+  l'UTC du serveur pour les commandes passées tard le soir.
+* **D3 — List-Unsubscribe.** En-tête `List-Unsubscribe: mailto:` ajouté
+  (`UNSUBSCRIBE_EMAIL`, repli sur Reply-To puis l'expéditeur). Pas de variante
+  « One-Click » HTTP (exigerait un endpoint web).
+
+Tests : 39 au vert, toujours sans accès réseau. Nouveaux tests couvrant le
+fuseau, la déduplication par personne, les en-têtes de délivrabilité et le retry
+SMTP transitoire vs définitif.
 
 ---
 

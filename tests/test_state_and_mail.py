@@ -104,6 +104,83 @@ def test_construction_du_message():
     assert message.is_multipart()
 
 
+def test_message_porte_les_entetes_de_delivrabilite():
+    """Message-ID, Date et List-Unsubscribe présents et cohérents."""
+    config = make_config()
+    reminder = make_reminder()
+    message = SmtpMailer(config).build_message(
+        reminder.membership, MailRenderer(config).render(reminder)
+    )
+    assert message["Date"]
+    message_id = message["Message-ID"]
+    assert message_id and message_id.startswith("<") and "example.org>" in message_id
+    # À défaut d'adresse dédiée, List-Unsubscribe retombe sur l'expéditeur.
+    assert message["List-Unsubscribe"] == "<mailto:adhesions@example.org?subject=Desabonnement>"
+
+
+def test_list_unsubscribe_utilise_l_adresse_dediee_si_fournie():
+    config = make_config()
+    config.unsubscribe_email = "stop@example.org"
+    message = SmtpMailer(config).build_message(
+        make_membership(), MailRenderer(config).render(make_reminder())
+    )
+    assert message["List-Unsubscribe"] == "<mailto:stop@example.org?subject=Desabonnement>"
+
+
+def test_smtp_reessaie_sur_rejet_temporaire_puis_reussit():
+    """Un rejet 4xx (greylisting) est réessayé ; l'envoi finit par passer."""
+    import smtplib
+
+    config = make_config()
+    config.smtp_retry_attempts = 3
+    config.smtp_retry_delay_seconds = 0  # pas d'attente réelle en test
+    config.smtp_delay_seconds = 0
+
+    class FlakyServer:
+        def __init__(self):
+            self.calls = 0
+
+        def send_message(self, message):
+            self.calls += 1
+            if self.calls == 1:
+                raise smtplib.SMTPResponseException(451, b"greylisted, try again")
+
+    mailer = SmtpMailer(config)
+    server = FlakyServer()
+    mailer._connect = lambda: server  # court-circuite la vraie connexion
+    mailer.send(make_reminder(), MailRenderer(config).render(make_reminder()))
+    assert server.calls == 2  # un échec temporaire, puis succès
+
+
+def test_smtp_ne_reessaie_pas_un_rejet_definitif():
+    """Un rejet 5xx (adresse invalide) échoue immédiatement, sans retry."""
+    import smtplib
+
+    from relance_adhesions.mailer import MailError
+
+    config = make_config()
+    config.smtp_retry_delay_seconds = 0
+    config.smtp_delay_seconds = 0
+
+    class RejectingServer:
+        def __init__(self):
+            self.calls = 0
+
+        def send_message(self, message):
+            self.calls += 1
+            raise smtplib.SMTPResponseException(550, b"mailbox unavailable")
+
+    mailer = SmtpMailer(config)
+    server = RejectingServer()
+    mailer._connect = lambda: server
+    try:
+        mailer.send(make_reminder(), MailRenderer(config).render(make_reminder()))
+    except MailError:
+        assert server.calls == 1
+        return
+    raise AssertionError("MailError attendue sur un rejet 5xx")
+
+
 def test_dry_run_ecrit_les_mails_sur_disque(tmp_path):
     """--dump-dir doit produire un .eml, un .txt et un .html relisibles."""
     from relance_adhesions.mailer import DryRunMailer

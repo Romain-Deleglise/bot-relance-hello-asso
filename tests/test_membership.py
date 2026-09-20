@@ -12,10 +12,12 @@ from relance_adhesions.membership import (  # noqa: E402
     Reminder,
     add_one_year,
     compute_end_date,
-    keep_latest_per_member,
+    dedupe_memberships,
     normalize_item,
     parse_date,
+    parse_local_date,
     select_to_remind,
+    today_in,
 )
 
 
@@ -79,11 +81,51 @@ def test_normalize_item_ignore_sans_date_de_commande():
     assert normalize_item(make_item(order_date=None), "MovingYear", None, 365) is None
 
 
-def test_keep_latest_per_member_deduplique_par_email():
+def test_dedupe_garde_la_plus_recente_pour_une_meme_personne():
+    """Option (c) : mêmes e-mail et nom = même personne, on garde la récente."""
     ancienne = normalize_item(make_item(1, "2023-03-10T09:00:00Z"), "MovingYear", None, 365)
     recente = normalize_item(make_item(2, "2025-03-10T09:00:00Z"), "MovingYear", None, 365)
-    retenues = keep_latest_per_member([ancienne, recente])
+    retenues = dedupe_memberships([ancienne, recente])
     assert [m.item_id for m in retenues] == [2]
+
+
+def test_dedupe_distingue_deux_personnes_partageant_une_adresse():
+    """Un même payeur pour deux personnes : chacune doit être relancée."""
+    parent = normalize_item(
+        make_item(1, "2025-03-10T09:00:00Z", email="foyer@example.org"),
+        "MovingYear", None, 365,
+    )
+    enfant_item = make_item(2, "2025-03-11T09:00:00Z", email="foyer@example.org")
+    enfant_item["user"] = {"firstName": "Léa", "lastName": "Dupont"}
+    enfant = normalize_item(enfant_item, "MovingYear", None, 365)
+    retenues = dedupe_memberships([parent, enfant])
+    assert {m.item_id for m in retenues} == {1, 2}
+
+
+def test_dedupe_fusionne_malgre_la_casse_et_les_espaces_du_nom():
+    a = make_item(1, "2024-03-10T09:00:00Z")
+    a["user"] = {"firstName": "Jean", "lastName": "DUPONT"}
+    b = make_item(2, "2025-03-10T09:00:00Z")
+    b["user"] = {"firstName": "jean", "lastName": "dupont"}
+    retenues = dedupe_memberships(
+        [normalize_item(a, "MovingYear", None, 365),
+         normalize_item(b, "MovingYear", None, 365)]
+    )
+    assert [m.item_id for m in retenues] == [2]
+
+
+def test_parse_local_date_utilise_le_fuseau_de_l_association():
+    """Une commande à 23 h 30 heure de Paris est datée du bon jour, pas de la veille."""
+    # 2025-06-10T22:30:00Z = 2025-06-11 00:30 à Paris (UTC+2 en été).
+    assert parse_local_date("2025-06-10T22:30:00Z", "Europe/Paris") == date(2025, 6, 11)
+    # En UTC, la même valeur retombe sur la veille.
+    assert parse_date("2025-06-10T22:30:00Z") == date(2025, 6, 10)
+
+
+def test_today_in_renvoie_une_date():
+    assert isinstance(today_in("Europe/Paris"), date)
+    # Fuseau inconnu : repli silencieux, pas d'exception.
+    assert isinstance(today_in("Zone/Inexistante"), date)
 
 
 def test_select_to_remind_deux_etapes():

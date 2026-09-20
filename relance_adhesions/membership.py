@@ -26,12 +26,35 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .helloasso import VALIDITY_CUSTOM, VALIDITY_ILLIMITED, VALIDITY_MOVING_YEAR
 
 logger = logging.getLogger(__name__)
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+# Fuseau de référence pour toute la logique de dates. HelloAsso renvoie les
+# dates de commande en UTC ; les convertir dans le fuseau de l'association avant
+# d'en extraire le jour évite qu'une commande passée tard le soir (heure de
+# Paris) ne soit datée de la veille, ce qui décalerait l'échéance d'un jour.
+DEFAULT_TIMEZONE = "Europe/Paris"
+
+
+def resolve_timezone(name: str | None) -> ZoneInfo:
+    """Renvoie le fuseau demandé, avec repli sur Europe/Paris si introuvable."""
+    try:
+        return ZoneInfo(name or DEFAULT_TIMEZONE)
+    except (ZoneInfoNotFoundError, ValueError):
+        logger.warning(
+            "Fuseau horaire %r inconnu, repli sur %s", name, DEFAULT_TIMEZONE
+        )
+        return ZoneInfo(DEFAULT_TIMEZONE)
+
+
+def today_in(tz: str | None) -> date:
+    """Date du jour dans le fuseau de l'association (et non celui du serveur)."""
+    return datetime.now(resolve_timezone(tz)).date()
 
 
 @dataclass
@@ -120,8 +143,19 @@ def parse_datetime(value: Any) -> datetime | None:
 
 
 def parse_date(value: Any) -> date | None:
+    """Jour d'une date ISO 8601, en UTC (suffisant pour une date sans heure)."""
     parsed = parse_datetime(value)
     return parsed.date() if parsed else None
+
+
+def parse_local_date(value: Any, tz: str | None = DEFAULT_TIMEZONE) -> date | None:
+    """Jour d'une date/heure ISO 8601, exprimé dans le fuseau `tz`.
+
+    À utiliser pour la date de commande, dont l'heure compte : une commande à
+    23 h 30 heure de Paris est datée du bon jour, pas de la veille en UTC.
+    """
+    parsed = parse_datetime(value)
+    return parsed.astimezone(resolve_timezone(tz)).date() if parsed else None
 
 
 def add_one_year(start: date) -> date:
@@ -176,10 +210,11 @@ def normalize_item(
     validity_type: str,
     form_end_date: date | None,
     duration_days: int,
+    tz: str | None = DEFAULT_TIMEZONE,
 ) -> Membership | None:
     """Transforme un item HelloAsso en `Membership`. `None` si inexploitable."""
     order = item.get("order") or {}
-    order_date = parse_date(order.get("date"))
+    order_date = parse_local_date(order.get("date"), tz)
     if order_date is None:
         logger.warning("Item %s ignoré : date de commande absente", item.get("id"))
         return None
@@ -212,19 +247,40 @@ def normalize_item(
     )
 
 
-def keep_latest_per_member(memberships: list[Membership]) -> list[Membership]:
-    """Ne conserve que l'adhésion la plus récente par adresse e-mail.
+def _person_key(membership: Membership) -> tuple[str, str]:
+    """Identité d'un adhérent : e-mail + nom normalisés (option c).
 
-    Sans ce filtre, une personne adhérente depuis trois ans recevrait une
-    relance pour chacune de ses anciennes adhésions expirées.
+    Le nom est mis en minuscules et ses espaces multiples réduits, pour que
+    « Jean  DUPONT » et « jean dupont » désignent bien la même personne.
     """
-    latest: dict[str, Membership] = {}
+    name = re.sub(r"\s+", " ", membership.full_name).strip().lower()
+    return (membership.email.lower(), name)
+
+
+def dedupe_memberships(memberships: list[Membership]) -> list[Membership]:
+    """Ne conserve que l'adhésion la plus récente par personne — option (c).
+
+    La clé est `(e-mail, nom)`, et non l'e-mail seul :
+
+    * deux personnes partageant une même adresse (un même payeur réglant pour un
+      couple ou un enfant) sont **distinguées** et relancées chacune ;
+    * les adhésions successives d'une **même** personne sont fusionnées : seule
+      la plus récente est gardée. Un adhérent qui renouvelle — même en avance —
+      n'est donc jamais relancé pour son ancienne échéance déjà remplacée.
+
+    Compromis assumé : deux personnes homonymes partageant une adresse (rare)
+    seraient fusionnées. C'est préférable au risque inverse (relancer quelqu'un
+    qui vient de renouveler), qui serait perçu comme une erreur.
+    """
+    latest: dict[tuple[str, str], Membership] = {}
     for membership in memberships:
-        key = membership.email.lower()
+        key = _person_key(membership)
         current = latest.get(key)
         if current is None or membership.order_date > current.order_date:
             latest[key] = membership
-    return sorted(latest.values(), key=lambda m: (m.end_date or date.max, m.email))
+    return sorted(
+        latest.values(), key=lambda m: (m.end_date or date.max, m.email, m.item_id)
+    )
 
 
 def select_to_remind(

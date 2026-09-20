@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import logging
 import logging.handlers
+import sqlite3
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -25,10 +26,11 @@ from .mailer import DryRunMailer, MailError, MailRenderer, SmtpMailer
 from .membership import (
     Membership,
     Reminder,
-    keep_latest_per_member,
+    dedupe_memberships,
     normalize_item,
     parse_date,
     select_to_remind,
+    today_in,
 )
 from .state import ReminderStore
 
@@ -136,7 +138,8 @@ def collect_memberships(
             order.get("formType") or "Membership", form_slug
         )
         membership = normalize_item(
-            item, validity_type, form_end_date, config.membership_duration_days
+            item, validity_type, form_end_date, config.membership_duration_days,
+            config.timezone,
         )
         if membership is not None:
             memberships.append(membership)
@@ -147,7 +150,7 @@ def collect_memberships(
 
 def run(config: Config, today: date | None = None, dump_dir: str | None = None) -> int:
     """Exécute une passe complète. Renvoie un code de sortie (0 = succès)."""
-    today = today or date.today()
+    today = today or today_in(config.timezone)
     sent = errors = 0
 
     if config.dry_run:
@@ -177,7 +180,7 @@ def run(config: Config, today: date | None = None, dump_dir: str | None = None) 
             return 3
 
         analysed = len(memberships)
-        latest = keep_latest_per_member(memberships)
+        latest = dedupe_memberships(memberships)
         selected = select_to_remind(
             latest, today, config.days_before_expiry, config.days_after_expiry
         )
@@ -235,13 +238,25 @@ def run(config: Config, today: date | None = None, dump_dir: str | None = None) 
                     continue
                 sent += 1
                 if not config.dry_run:
-                    # On n'enregistre qu'après un envoi réellement réussi.
-                    store.mark_sent(
-                        reminder.dedup_key,
-                        membership.item_id,
-                        membership.email,
-                        membership.end_date,
-                    )
+                    # On n'enregistre qu'après un envoi réellement réussi. Une
+                    # erreur d'écriture (disque plein, verrou) ne doit pas
+                    # interrompre le reste du batch ; elle est signalée, et au
+                    # pire cet adhérent sera relancé au prochain passage — mieux
+                    # qu'un arrêt total en plein envoi.
+                    try:
+                        store.mark_sent(
+                            reminder.dedup_key,
+                            membership.item_id,
+                            membership.email,
+                            membership.end_date,
+                        )
+                    except sqlite3.Error as exc:
+                        errors += 1
+                        logger.error(
+                            "Mail envoyé à %s mais enregistrement anti-doublon "
+                            "impossible (%s) : risque de relance au prochain passage",
+                            membership.email, exc,
+                        )
                 logger.info(
                     "Relance %s (%s) → %s <%s> (échéance %s)",
                     "simulée" if config.dry_run else "envoyée",

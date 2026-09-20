@@ -54,6 +54,16 @@ def _get_int(name: str, default: int) -> int:
         raise ConfigError(f"{name} doit être un entier (valeur reçue : {raw!r})") from exc
 
 
+def _get_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ConfigError(f"{name} doit être un nombre (valeur reçue : {raw!r})") from exc
+
+
 def _get_bool(name: str, default: bool) -> bool:
     raw = os.environ.get(name)
     if raw is None or raw == "":
@@ -91,6 +101,10 @@ class Config:
     # contre un rattrapage massif au premier lancement.
     max_membership_age_days: int = 800
 
+    # Fuseau de l'association : toute la logique de dates (échéances, « today »)
+    # s'y rapporte, indépendamment du fuseau du serveur (UTC en conteneur).
+    timezone: str = "Europe/Paris"
+
     # Restreint la recherche à certains formulaires (slugs). Vide = tous les
     # formulaires d'adhésion de l'organisation.
     form_slugs: list[str] = field(default_factory=list)
@@ -102,10 +116,22 @@ class Config:
     smtp_password: str = ""
     smtp_use_tls: bool = True  # STARTTLS sur port 587
     smtp_use_ssl: bool = False  # SMTPS direct sur port 465
+    # Temporisation entre deux envois : évite de saturer le serveur / relais et
+    # de déclencher ses limites anti-abus. En secondes.
+    smtp_delay_seconds: float = 1.0
+    # Reconnexion périodique (0 = jamais) : certains relais coupent une session
+    # trop longue ou plafonnent le nombre de messages par connexion.
+    smtp_max_per_connection: int = 0
+    # Retry sur rejet SMTP *temporaire* (4xx : greylisting, throttling).
+    smtp_retry_attempts: int = 3
+    smtp_retry_delay_seconds: float = 5.0
     mail_from: str = ""
     mail_from_name: str = ""
     mail_reply_to: str = ""
     mail_bcc: str = ""
+    # Adresse de désinscription (en-tête List-Unsubscribe). À défaut, on retombe
+    # sur Reply-To puis sur l'expéditeur.
+    unsubscribe_email: str = ""
     mail_subject: str = "Votre adhésion arrive à échéance"
     # Sujet de la seconde relance, envoyée le jour de l'expiration.
     mail_subject_expiration: str = "Votre adhésion à $association expire aujourd'hui"
@@ -140,6 +166,7 @@ class Config:
             days_after_expiry=_get_int("RELANCE_DAYS_AFTER_EXPIRY", 0),
             membership_duration_days=_get_int("RELANCE_MEMBERSHIP_DURATION_DAYS", 365),
             max_membership_age_days=_get_int("RELANCE_MAX_MEMBERSHIP_AGE_DAYS", 800),
+            timezone=_get("RELANCE_TIMEZONE", "Europe/Paris"),
             form_slugs=_get_list("RELANCE_FORM_SLUGS"),
             smtp_host=_get("SMTP_HOST"),
             smtp_port=_get_int("SMTP_PORT", 587),
@@ -147,10 +174,15 @@ class Config:
             smtp_password=_get("SMTP_PASSWORD"),
             smtp_use_tls=_get_bool("SMTP_USE_TLS", True),
             smtp_use_ssl=_get_bool("SMTP_USE_SSL", False),
+            smtp_delay_seconds=_get_float("SMTP_DELAY_SECONDS", 1.0),
+            smtp_max_per_connection=_get_int("SMTP_MAX_PER_CONNECTION", 0),
+            smtp_retry_attempts=_get_int("SMTP_RETRY_ATTEMPTS", 3),
+            smtp_retry_delay_seconds=_get_float("SMTP_RETRY_DELAY_SECONDS", 5.0),
             mail_from=_get("MAIL_FROM"),
             mail_from_name=_get("MAIL_FROM_NAME", "Pause IA"),
             mail_reply_to=_get("MAIL_REPLY_TO"),
             mail_bcc=_get("MAIL_BCC"),
+            unsubscribe_email=_get("UNSUBSCRIBE_EMAIL"),
             mail_subject=_get("MAIL_SUBJECT", "Votre adhésion arrive à échéance"),
             mail_subject_expiration=_get(
                 "MAIL_SUBJECT_EXPIRATION",
