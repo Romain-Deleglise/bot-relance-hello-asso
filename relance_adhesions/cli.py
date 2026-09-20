@@ -11,6 +11,7 @@ import logging
 import logging.handlers
 import sys
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from .config import Config, ConfigError, load_env_file
@@ -34,20 +35,36 @@ logger = logging.getLogger("relance_adhesions")
 
 
 def setup_logging(level: str, log_file: str = "") -> None:
-    """Journalisation console + fichier (rotation) pour le suivi du cron."""
+    """Journalisation console + fichier (rotation) pour le suivi du cron.
+
+    Le dossier du fichier de log est créé au besoin. S'il reste inaccessible
+    (droits, disque plein), on se rabat sur la sortie standard plutôt que de
+    faire échouer toute l'exécution : perdre le log ne doit pas empêcher les
+    relances de partir.
+    """
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    file_error: str = ""
     if log_file:
-        handlers.append(
-            logging.handlers.RotatingFileHandler(
-                log_file, maxBytes=2_000_000, backupCount=5, encoding="utf-8"
+        try:
+            parent = Path(log_file).parent
+            if str(parent) not in ("", "."):
+                parent.mkdir(parents=True, exist_ok=True)
+            handlers.append(
+                logging.handlers.RotatingFileHandler(
+                    log_file, maxBytes=2_000_000, backupCount=5, encoding="utf-8"
+                )
             )
-        )
+        except OSError as exc:
+            file_error = f"Journalisation fichier désactivée ({log_file}) : {exc}"
+
     logging.basicConfig(
         level=getattr(logging, level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
         handlers=handlers,
         force=True,
     )
+    if file_error:
+        logger.warning(file_error)
 
 
 class FormValidityResolver:
