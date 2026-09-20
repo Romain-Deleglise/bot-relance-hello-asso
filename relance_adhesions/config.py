@@ -22,6 +22,14 @@ def load_env_file(path: str | os.PathLike[str]) -> None:
     Implémentation volontairement minimale pour éviter une dépendance
     supplémentaire (python-dotenv). Les lignes vides et les commentaires (`#`)
     sont ignorés, les guillemets entourant la valeur sont retirés.
+
+    Robustesse : un commentaire en fin de ligne (`  # …`) sur une valeur NON
+    quotée est retiré — sans quoi une valeur suivie par erreur d'un commentaire
+    (copié-collé d'un exemple) serait prise littéralement et provoquerait des
+    pannes obscures (ex. un host SMTP inutilisable). Le commentaire doit être
+    précédé d'une espace, pour ne pas casser une valeur contenant un « # »
+    légitime (mot de passe). Une valeur qui contient réellement «  # » doit
+    être entourée de guillemets.
     """
     file = Path(path)
     if not file.is_file():
@@ -33,7 +41,13 @@ def load_env_file(path: str | os.PathLike[str]) -> None:
             continue
         key, _, value = line.partition("=")
         key = key.strip()
-        value = value.strip().strip('"').strip("'")
+        value = value.strip()
+        # Valeur non quotée : couper un éventuel commentaire de fin de ligne.
+        if value[:1] not in ('"', "'"):
+            hash_pos = value.find(" #")
+            if hash_pos != -1:
+                value = value[:hash_pos].rstrip()
+        value = value.strip('"').strip("'")
         os.environ.setdefault(key, value)
 
 
