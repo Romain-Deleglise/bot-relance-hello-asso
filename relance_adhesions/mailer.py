@@ -120,6 +120,13 @@ class MailRenderer:
             "mention_montant": f" (d'un montant de {montant})" if montant else "",
             "association": self.config.association_name,
             "lien_adhesion": self.config.renewal_url,
+            # Adresse pour le lien « Se désinscrire » du pied de page (même
+            # logique que l'en-tête List-Unsubscribe).
+            "email_desinscription": (
+                self.config.unsubscribe_email
+                or self.config.mail_reply_to
+                or self.config.mail_from
+            ),
         }
 
     def render(self, reminder: Reminder) -> RenderedMail:
