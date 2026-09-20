@@ -378,9 +378,33 @@ sans fuite) n'a pas été touché. Correctifs :
   (`UNSUBSCRIBE_EMAIL`, repli sur Reply-To puis l'expéditeur). Pas de variante
   « One-Click » HTTP (exigerait un endpoint web).
 
-Tests : 39 au vert, toujours sans accès réseau. Nouveaux tests couvrant le
+Tests : au vert, toujours sans accès réseau. Nouveaux tests couvrant le
 fuseau, la déduplication par personne, les en-têtes de délivrabilité et le retry
 SMTP transitoire vs définitif.
+
+### 6.8 Supervision et alerte (20/09/2026) — « être prévenu si le mail est down »
+
+Exigence Romain : si le service d'envoi tombe, il faut être alerté par un canal
+**indépendant** de ce même service, sinon la panne passe inaperçue.
+
+* **Panne d'envoi détectée proprement** : une connexion/authentification SMTP qui
+  échoue lève désormais `MailConnectionError` (distinct d'un rejet destinataire).
+  Le bot **arrête** alors le batch au lieu de marteler chaque destinataire, et
+  marque l'exécution en échec.
+* **Alerte active par webhook** (`ALERT_WEBHOOK_URL`) : message poussé sur Discord
+  ou Slack en cas d'échec (mail injoignable, API HelloAsso KO, erreurs d'envoi,
+  garde-fou déclenché, erreur inattendue). Le corps porte `content` (Discord) et
+  `text` (Slack), donc le même appel marche pour les deux.
+* **Dead-man's switch** (`HEALTHCHECK_URL`, type healthchecks.io) : ping de succès
+  à chaque run propre, ping `/fail` sinon. L'absence de ping quotidien fait
+  alerter le service de supervision — seule façon de détecter « la cron n'a pas
+  tourné » ou « le serveur est éteint ».
+* Ces alertes sont *best effort* : un webhook cassé est journalisé mais
+  n'empêche jamais les relances de partir. Rien n'est émis en dry-run.
+* Complément côté cron : `MAILTO` (mail cron via MTA local, indépendant de SES).
+
+Les deux URL se règlent dans `.env` (`ALERT_WEBHOOK_URL`, `HEALTHCHECK_URL`).
+Fortement recommandé de renseigner au moins l'une des deux en production.
 
 ---
 

@@ -35,7 +35,16 @@ logger = logging.getLogger(__name__)
 
 
 class MailError(Exception):
-    """Échec d'envoi d'un mail."""
+    """Échec d'envoi d'un mail (rejet propre à un destinataire)."""
+
+
+class MailConnectionError(MailError):
+    """Le service de mail est injoignable (connexion/authentification SMTP).
+
+    Distinct de `MailError` : ce n'est pas le rejet d'un destinataire mais une
+    panne du canal d'envoi. L'orchestration doit alors interrompre le batch et
+    déclencher une alerte, plutôt que d'échouer sur chaque destinataire.
+    """
 
 
 def _format_fr_date(value) -> str:
@@ -187,7 +196,9 @@ class SmtpMailer:
             if cfg.smtp_user:
                 server.login(cfg.smtp_user, cfg.smtp_password)
         except (smtplib.SMTPException, OSError) as exc:
-            raise MailError(f"Connexion SMTP impossible ({cfg.smtp_host}:{cfg.smtp_port}) : {exc}") from exc
+            raise MailConnectionError(
+                f"Connexion SMTP impossible ({cfg.smtp_host}:{cfg.smtp_port}) : {exc}"
+            ) from exc
         self._server = server
         return server
 
@@ -226,17 +237,25 @@ class SmtpMailer:
         attempts = max(1, self.config.smtp_retry_attempts)
         delay = self.config.smtp_retry_delay_seconds
         last_error: Exception | None = None
+        connection_failure = False
 
         for attempt in range(1, attempts + 1):
+            connection_failure = False
             try:
                 self._connect().send_message(message)
                 self._sent_count += 1
                 return
+            except MailConnectionError as exc:
+                # Le canal d'envoi est injoignable (connexion/login SMTP).
+                self._server = None
+                last_error = exc
+                connection_failure = True
             except (smtplib.SMTPServerDisconnected, smtplib.SMTPConnectError) as exc:
-                # Déconnexion : on repart sur une connexion neuve.
+                # Déconnexion en cours de série : on repart sur une connexion neuve.
                 logger.warning("Connexion SMTP perdue, reconnexion (%s)", exc)
                 self._server = None
                 last_error = exc
+                connection_failure = True
             except (smtplib.SMTPException, OSError) as exc:
                 if not self._is_transient(exc):
                     raise MailError(
@@ -248,12 +267,18 @@ class SmtpMailer:
 
             if attempt < attempts:
                 logger.warning(
-                    "Envoi à %s : rejet temporaire, nouvel essai %s/%s dans %.0f s (%s)",
+                    "Envoi à %s : échec temporaire, nouvel essai %s/%s dans %.0f s (%s)",
                     membership.email, attempt + 1, attempts, delay, last_error,
                 )
                 time.sleep(delay)
                 delay *= 2
 
+        # Après épuisement des tentatives : distinguer une panne du service
+        # (à remonter comme telle pour alerte) d'un simple rejet destinataire.
+        if connection_failure:
+            raise MailConnectionError(
+                f"Service de mail injoignable après {attempts} essais : {last_error}"
+            )
         raise MailError(
             f"Envoi à {membership.email} impossible après {attempts} essais : {last_error}"
         )

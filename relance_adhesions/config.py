@@ -151,6 +151,15 @@ class Config:
     template_text_expiration: str = "templates/relance-expiration.txt"
     template_html_expiration: str = "templates/relance-expiration.html"
 
+    # --- Supervision / alerte (canaux INDÉPENDANTS du service de mail) ------
+    # Webhook Discord ou Slack : reçoit un message en cas d'échec (service mail
+    # injoignable, API HelloAsso KO, erreurs d'envoi, garde-fou déclenché).
+    alert_webhook_url: str = ""
+    # Dead-man's switch (healthchecks.io ou équivalent) : ping à chaque succès,
+    # ping d'échec sinon. L'absence de ping quotidien déclenche une alerte côté
+    # service de supervision — couvre aussi « la cron n'a pas tourné ».
+    healthcheck_url: str = ""
+
     # --- Exécution ----------------------------------------------------------
     state_db: str = "data/relances.sqlite3"
     log_file: str = ""
@@ -205,6 +214,8 @@ class Config:
             template_html_expiration=_get(
                 "TEMPLATE_HTML_EXPIRATION", "templates/relance-expiration.html"
             ),
+            alert_webhook_url=_get("ALERT_WEBHOOK_URL"),
+            healthcheck_url=_get("HEALTHCHECK_URL"),
             state_db=_get("STATE_DB", "data/relances.sqlite3"),
             log_file=_get("LOG_FILE"),
             log_level=_get("LOG_LEVEL", "INFO"),

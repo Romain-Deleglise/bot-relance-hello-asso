@@ -166,6 +166,27 @@ def test_smtp_reessaie_sur_rejet_temporaire_puis_reussit():
     assert server.calls == 2  # un échec temporaire, puis succès
 
 
+def test_service_mail_injoignable_leve_une_erreur_dediee():
+    """Connexion SMTP impossible → MailConnectionError (et non MailError simple)."""
+    from relance_adhesions.mailer import MailConnectionError
+
+    config = make_config()
+    config.smtp_retry_attempts = 2
+    config.smtp_retry_delay_seconds = 0
+    config.smtp_delay_seconds = 0
+
+    def refuse_connexion():
+        raise MailConnectionError("SES injoignable")
+
+    mailer = SmtpMailer(config)
+    mailer._connect = refuse_connexion
+    try:
+        mailer.send(make_reminder(), MailRenderer(config).render(make_reminder()))
+    except MailConnectionError:
+        return
+    raise AssertionError("MailConnectionError attendue quand le service est down")
+
+
 def test_smtp_ne_reessaie_pas_un_rejet_definitif():
     """Un rejet 5xx (adresse invalide) échoue immédiatement, sans retry."""
     import smtplib

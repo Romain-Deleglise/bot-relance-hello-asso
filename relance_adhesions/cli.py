@@ -9,12 +9,14 @@ from __future__ import annotations
 import argparse
 import logging
 import logging.handlers
+import socket
 import sqlite3
 import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from . import notify
 from .config import Config, ConfigError, load_env_file
 from .helloasso import (
     VALIDITY_MOVING_YEAR,
@@ -22,7 +24,13 @@ from .helloasso import (
     HelloAssoClient,
     HelloAssoError,
 )
-from .mailer import DryRunMailer, MailError, MailRenderer, SmtpMailer
+from .mailer import (
+    DryRunMailer,
+    MailConnectionError,
+    MailError,
+    MailRenderer,
+    SmtpMailer,
+)
 from .membership import (
     Membership,
     Reminder,
@@ -153,6 +161,20 @@ def run(config: Config, today: date | None = None, dump_dir: str | None = None) 
     today = today or today_in(config.timezone)
     sent = errors = 0
 
+    hostname = socket.gethostname()
+
+    def supervise(ok: bool, detail: str = "") -> None:
+        """Supervision par canaux indépendants du mail (jamais en dry-run)."""
+        if config.dry_run:
+            return
+        notify.ping_healthcheck(config.healthcheck_url, success=ok)
+        if not ok:
+            notify.send_alert(
+                config.alert_webhook_url,
+                f"[Relance adhésions {config.association_name}] "
+                f"ÉCHEC sur {hostname} : {detail}",
+            )
+
     if config.dry_run:
         logger.warning("MODE DRY-RUN : aucun mail ne sera réellement envoyé")
     else:
@@ -173,10 +195,12 @@ def run(config: Config, today: date | None = None, dump_dir: str | None = None) 
         except HelloAssoAuthError as exc:
             logger.error("Authentification HelloAsso impossible : %s", exc)
             store.finish_run(run_id, 0, 0, 0, 1)
+            supervise(False, f"authentification HelloAsso impossible : {exc}")
             return 2
         except HelloAssoError as exc:
             logger.error("API HelloAsso indisponible : %s", exc)
             store.finish_run(run_id, 0, 0, 0, 1)
+            supervise(False, f"API HelloAsso indisponible : {exc}")
             return 3
 
         analysed = len(memberships)
@@ -208,6 +232,11 @@ def run(config: Config, today: date | None = None, dump_dir: str | None = None) 
                 len(pending), config.max_emails_per_run,
             )
             store.finish_run(run_id, analysed, len(selected), 0, 1)
+            supervise(
+                False,
+                f"garde-fou déclenché : {len(pending)} relances > "
+                f"MAX_EMAILS_PER_RUN={config.max_emails_per_run}, rien envoyé",
+            )
             return 4
 
         if pending:
@@ -227,11 +256,21 @@ def run(config: Config, today: date | None = None, dump_dir: str | None = None) 
         mailer = (
             DryRunMailer(config, dump_dir) if config.dry_run else SmtpMailer(config)
         )
+        mail_down = False
         with mailer:
             for reminder in pending:
                 membership = reminder.membership
                 try:
                     mailer.send(reminder, renderer.render(reminder))
+                except MailConnectionError as exc:
+                    # Panne du canal d'envoi : inutile d'insister sur chaque
+                    # destinataire. On arrête et on alertera (canal indépendant).
+                    errors += 1
+                    mail_down = True
+                    logger.error(
+                        "Service de mail injoignable, arrêt des envois : %s", exc
+                    )
+                    break
                 except MailError as exc:
                     errors += 1
                     logger.error("Échec d'envoi : %s", exc)
@@ -271,6 +310,19 @@ def run(config: Config, today: date | None = None, dump_dir: str | None = None) 
         analysed, len(selected), sent,
         "simulée(s)" if config.dry_run else "envoyée(s)", errors,
     )
+
+    # Supervision finale : ping de succès si tout est propre, alerte sinon.
+    if mail_down:
+        supervise(
+            False,
+            f"service de mail injoignable — {sent} envoyé(s), "
+            f"{len(pending) - sent} relance(s) non partie(s)",
+        )
+    elif errors:
+        supervise(False, f"{errors} erreur(s) d'envoi sur {len(pending)} relance(s)")
+    else:
+        supervise(True)
+
     return 1 if errors else 0
 
 
@@ -350,13 +402,35 @@ def main(argv: list[str] | None = None) -> int:
         return run(config, today, args.dump_dir)
     except ConfigError as exc:
         logger.error("Configuration invalide : %s", exc)
+        _alert_unexpected(config, f"configuration invalide : {exc}")
         return 2
     except MailError as exc:
         logger.error("Erreur d'envoi : %s", exc)
+        _alert_unexpected(config, f"erreur d'envoi : {exc}")
         return 5
-    except Exception:  # noqa: BLE001 - garantit une trace dans le log du cron
+    except Exception as exc:  # noqa: BLE001 - garantit une trace dans le log du cron
         logger.exception("Erreur inattendue")
+        _alert_unexpected(config, f"erreur inattendue : {exc}")
         return 1
+
+
+def _alert_unexpected(config: Config, detail: str) -> None:
+    """Alerte de dernier recours pour une erreur remontée jusqu'à main().
+
+    Best effort et jamais en dry-run : on ne veut ni bruit de test, ni qu'un
+    problème d'alerte masque l'erreur d'origine déjà journalisée.
+    """
+    if config.dry_run:
+        return
+    try:
+        notify.ping_healthcheck(config.healthcheck_url, success=False)
+        notify.send_alert(
+            config.alert_webhook_url,
+            f"[Relance adhésions {config.association_name}] "
+            f"ÉCHEC sur {socket.gethostname()} : {detail}",
+        )
+    except Exception:  # noqa: BLE001 - l'alerte ne doit jamais masquer l'erreur
+        logger.exception("Échec de l'alerte de supervision")
 
 
 if __name__ == "__main__":
