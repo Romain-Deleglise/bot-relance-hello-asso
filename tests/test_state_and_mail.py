@@ -76,3 +76,36 @@ def test_construction_du_message():
     assert message["To"] == "Jean Dupont <jean@example.org>"
     assert message["From"] == "Pause IA <adhesions@example.org>"
     assert message.is_multipart()
+
+
+def test_dry_run_ecrit_les_mails_sur_disque(tmp_path):
+    """--dump-dir doit produire un .eml, un .txt et un .html relisibles."""
+    from relance_adhesions.mailer import DryRunMailer
+
+    config = make_config()
+    membership = make_membership()
+    rendered = MailRenderer(config).render(membership)
+
+    with DryRunMailer(config, str(tmp_path / "mails")) as mailer:
+        mailer.send(membership, rendered)
+
+    produits = sorted(p.name for p in (tmp_path / "mails").iterdir())
+    assert produits == [
+        "001-jean@example.org.eml",
+        "001-jean@example.org.html",
+        "001-jean@example.org.txt",
+    ]
+    texte = (tmp_path / "mails" / "001-jean@example.org.txt").read_text(encoding="utf-8")
+    assert "Jean Dupont" in texte and "10/03/2026" in texte
+    eml = (tmp_path / "mails" / "001-jean@example.org.eml").read_text(encoding="utf-8")
+    assert "To: Jean Dupont <jean@example.org>" in eml
+
+
+def test_dry_run_sans_dump_dir_n_ecrit_rien(tmp_path):
+    from relance_adhesions.mailer import DryRunMailer
+
+    config = make_config()
+    membership = make_membership()
+    with DryRunMailer(config) as mailer:
+        mailer.send(membership, MailRenderer(config).render(membership))
+    assert list(tmp_path.iterdir()) == []

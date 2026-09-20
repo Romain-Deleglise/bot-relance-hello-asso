@@ -127,7 +127,7 @@ def collect_memberships(
     return memberships
 
 
-def run(config: Config, today: date | None = None) -> int:
+def run(config: Config, today: date | None = None, dump_dir: str | None = None) -> int:
     """Exécute une passe complète. Renvoie un code de sortie (0 = succès)."""
     today = today or date.today()
     sent = errors = 0
@@ -188,7 +188,21 @@ def run(config: Config, today: date | None = None) -> int:
             store.finish_run(run_id, analysed, len(selected), 0, 1)
             return 4
 
-        mailer = DryRunMailer() if config.dry_run else SmtpMailer(config)
+        if pending:
+            logger.info("Destinataires retenus :")
+            for membership in pending:
+                logger.info(
+                    "  · %-32s %-34s échéance %s  (%s, formulaire « %s »)",
+                    membership.display_name,
+                    membership.email,
+                    membership.end_date,
+                    membership.validity_type,
+                    membership.form_slug or "?",
+                )
+
+        mailer = (
+            DryRunMailer(config, dump_dir) if config.dry_run else SmtpMailer(config)
+        )
         with mailer:
             for membership in pending:
                 try:
@@ -243,6 +257,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--days-after", type=int, default=None,
         help="Relance aussi les adhésions expirées depuis au plus N jours",
     )
+    parser.add_argument(
+        "--dump-dir", default=None,
+        help="Dossier où écrire les mails rendus (.eml/.txt/.html) en dry-run, "
+             "pour les relire avant tout envoi réel",
+    )
     parser.add_argument("--log-level", default=None, help="DEBUG, INFO, WARNING, ERROR")
     parser.add_argument(
         "--today", default=None,
@@ -268,7 +287,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     # Les options de ligne de commande priment sur la configuration.
-    if args.dry_run:
+    if args.dry_run or args.dump_dir:
+        # --dump-dir n'a de sens qu'en simulation : il l'active implicitement,
+        # pour qu'une relecture des mails n'envoie jamais rien par mégarde.
         config.dry_run = True
     if args.days_before is not None:
         config.days_before_expiry = args.days_before
@@ -288,7 +309,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     try:
-        return run(config, today)
+        return run(config, today, args.dump_dir)
     except ConfigError as exc:
         logger.error("Configuration invalide : %s", exc)
         return 2

@@ -92,12 +92,52 @@ n'est écrit en dur dans le code.
 # Simulation : aucun mail n'est envoyé, tout est journalisé.
 .venv/bin/python -m relance_adhesions --dry-run
 
+# Simulation + écriture des mails rendus sur disque, pour les relire.
+.venv/bin/python -m relance_adhesions --dump-dir ./apercu-mails
+
 # Fenêtre élargie pour vérifier que des adhésions sont bien détectées.
 .venv/bin/python -m relance_adhesions --dry-run --days-before 120 --log-level DEBUG
 
 # Se placer à une date donnée (rejeu / contrôle d'un calcul d'échéance).
 .venv/bin/python -m relance_adhesions --dry-run --today 2026-03-01
 ```
+
+### Qui serait relancé ?
+
+Le dry-run affiche la liste nominative des destinataires retenus, avec pour
+chacun l'échéance calculée, le `validityType` appliqué et le formulaire
+d'origine — de quoi vérifier d'un coup d'œil que les dates sont justes :
+
+```
+Formulaire adhesion : validityType=MovingYear, endDate=None
+3 items d'adhésion analysés, 3 exploitables
+Fenêtre de relance : échéance entre 2026-09-25 et 2026-10-10 → 2 adhésion(s) concernée(s)
+Destinataires retenus :
+  · Claire Martin        claire.martin@example.org   échéance 2026-09-28  (MovingYear, formulaire « adhesion »)
+  · Jean Dupont          jean.dupont@example.org     échéance 2026-10-02  (MovingYear, formulaire « adhesion »)
+Bilan : 3 adhésion(s) analysée(s), 2 dans la fenêtre, 2 relance(s) simulée(s), 0 erreur(s)
+```
+
+### À quoi ressemblent les mails ?
+
+`--dump-dir <dossier>` écrit, pour chaque destinataire, le mail réellement
+rendu — avec son prénom, sa date d'échéance, son tarif :
+
+```
+apercu-mails/
+  001-claire.martin@example.org.eml    # message complet (en-têtes compris)
+  001-claire.martin@example.org.txt    # version texte seule
+  001-claire.martin@example.org.html   # version HTML, à ouvrir au navigateur
+  002-jean.dupont@example.org.eml
+  ...
+```
+
+Le `.eml` s'ouvre dans n'importe quel client mail (Thunderbird, Apple Mail,
+Outlook) et montre exactement ce que recevra la personne. Le `.html` s'ouvre
+au navigateur pour contrôler la mise en forme.
+
+`--dump-dir` **force le mode simulation** : impossible d'envoyer quoi que ce
+soit par mégarde en voulant relire les textes.
 
 En dry-run, **rien n'est enregistré dans la base anti-doublon** : vous pouvez
 rejouer autant de fois que nécessaire sans « consommer » les relances.

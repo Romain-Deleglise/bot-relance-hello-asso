@@ -13,6 +13,7 @@ d'écrire une classe exposant la même méthode `send(...)` et de l'injecter dan
 from __future__ import annotations
 
 import logging
+import re
 import smtplib
 import ssl
 from dataclasses import dataclass
@@ -97,6 +98,24 @@ class MailRenderer:
         )
 
 
+def build_message(
+    config: Config, membership: Membership, mail: RenderedMail
+) -> EmailMessage:
+    """Assemble le message final (texte + HTML alternatif)."""
+    message = EmailMessage()
+    message["Subject"] = mail.subject
+    message["From"] = formataddr((config.mail_from_name or None, config.mail_from))
+    message["To"] = formataddr((membership.full_name or None, membership.email))
+    if config.mail_reply_to:
+        message["Reply-To"] = config.mail_reply_to
+    if config.mail_bcc:
+        message["Bcc"] = config.mail_bcc
+    message.set_content(mail.text)
+    if mail.html:
+        message.add_alternative(mail.html, subtype="html")
+    return message
+
+
 class SmtpMailer:
     """Envoi SMTP, avec une connexion réutilisée pour toute l'exécution."""
 
@@ -132,19 +151,7 @@ class SmtpMailer:
         return server
 
     def build_message(self, membership: Membership, mail: RenderedMail) -> EmailMessage:
-        cfg = self.config
-        message = EmailMessage()
-        message["Subject"] = mail.subject
-        message["From"] = formataddr((cfg.mail_from_name or None, cfg.mail_from))
-        message["To"] = formataddr((membership.full_name or None, membership.email))
-        if cfg.mail_reply_to:
-            message["Reply-To"] = cfg.mail_reply_to
-        if cfg.mail_bcc:
-            message["Bcc"] = cfg.mail_bcc
-        message.set_content(mail.text)
-        if mail.html:
-            message.add_alternative(mail.html, subtype="html")
-        return message
+        return build_message(self.config, membership, mail)
 
     def send(self, membership: Membership, mail: RenderedMail) -> None:
         message = self.build_message(membership, mail)
@@ -171,13 +178,33 @@ class SmtpMailer:
 
 
 class DryRunMailer:
-    """Mailer de simulation : n'envoie rien, journalise ce qui serait envoyé."""
+    """Mailer de simulation : n'envoie rien.
+
+    Journalise ce qui serait envoyé et, si `dump_dir` est fourni, écrit sur
+    disque le mail rendu pour chaque destinataire : un `.eml` (le message
+    exact, ouvrable dans n'importe quel client mail), un `.txt` et, le cas
+    échéant, un `.html`. C'est le moyen de relire les textes avant le premier
+    envoi réel.
+    """
+
+    def __init__(self, config: Config, dump_dir: str | None = None) -> None:
+        self.config = config
+        self.dump_dir = Path(dump_dir) if dump_dir else None
+        self._index = 0
+        if self.dump_dir:
+            self.dump_dir.mkdir(parents=True, exist_ok=True)
+            logger.info("Les mails simulés seront écrits dans %s", self.dump_dir)
 
     def __enter__(self) -> "DryRunMailer":
         return self
 
     def __exit__(self, *exc_info: object) -> None:
         return None
+
+    @staticmethod
+    def _safe_name(email: str) -> str:
+        """Nom de fichier sûr dérivé de l'adresse."""
+        return re.sub(r"[^A-Za-z0-9._@-]", "_", email)[:80]
 
     def send(self, membership: Membership, mail: RenderedMail) -> None:
         logger.info(
@@ -187,6 +214,20 @@ class DryRunMailer:
             membership.end_date,
             mail.subject,
         )
+        if not self.dump_dir:
+            return
+
+        self._index += 1
+        stem = f"{self._index:03d}-{self._safe_name(membership.email)}"
+        try:
+            message = build_message(self.config, membership, mail)
+            (self.dump_dir / f"{stem}.eml").write_bytes(message.as_bytes())
+            (self.dump_dir / f"{stem}.txt").write_text(mail.text, encoding="utf-8")
+            if mail.html:
+                (self.dump_dir / f"{stem}.html").write_text(mail.html, encoding="utf-8")
+        except OSError as exc:
+            # Un disque plein ne doit pas faire échouer une simulation.
+            logger.error("Écriture du mail simulé impossible (%s) : %s", stem, exc)
 
     def close(self) -> None:
         return None
