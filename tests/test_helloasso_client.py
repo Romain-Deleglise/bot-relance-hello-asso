@@ -183,3 +183,39 @@ def test_progression_meme_si_le_serveur_ignore_le_continuation_token():
     items = list(make_client(session).iter_membership_items("pause-ia", page_size=2))
     assert [item["id"] for item in items] == [1, 2, 3, 4, 5]
     assert session.index_demandes == [1, 2, 3]
+
+
+def test_total_pages_menteur_ne_stoppe_pas_la_pagination():
+    """Régression : HelloAsso annonce totalPages=1 malgré plusieurs pages.
+
+    C'est le troisième verrou rencontré sur les données réelles, après
+    totalCount=-1 et la dépendance au continuationToken. Une page pleine
+    prime désormais sur toute métadonnée.
+    """
+    session = FakeSession([TOKEN_OK], [
+        _page([1, 2], 1, total_pages=1, total_count=-1),
+        _page([3, 4], 2, total_pages=1, total_count=-1),
+        _page([5], 3, total_pages=1, total_count=-1),
+    ])
+    items = list(make_client(session).iter_membership_items("pause-ia", page_size=2))
+    assert [item["id"] for item in items] == [1, 2, 3, 4, 5]
+
+
+def test_serveur_qui_ignore_la_pagination_ne_boucle_pas():
+    """Un serveur servant toujours la même page doit interrompre la boucle."""
+    class ToujoursPareil:
+        def __init__(self):
+            self.appels = 0
+
+        def post(self, url, **kwargs):
+            return TOKEN_OK
+
+        def get(self, url, params=None, **kwargs):
+            self.appels += 1
+            return _page([1, 2], 1, total_count=-1)
+
+    session = ToujoursPareil()
+    items = list(make_client(session).iter_membership_items("pause-ia", page_size=2))
+    # Les doublons sont écartés et la boucle s'arrête vite.
+    assert [item["id"] for item in items] == [1, 2]
+    assert session.appels == 2

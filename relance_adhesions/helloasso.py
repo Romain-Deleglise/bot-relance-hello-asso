@@ -213,6 +213,7 @@ class HelloAssoClient:
         page_params = dict(params)
         page_size = int(params.get("pageSize") or 20)
         seen_tokens: set[str] = set()
+        seen_ids: set[Any] = set()
         total_yielded = 0
         announced_total = False
 
@@ -232,23 +233,43 @@ class HelloAssoClient:
                 logger.info("HelloAsso annonce %s résultat(s) au total", total_count)
                 announced_total = True
 
+            # Déduplication par identifiant : si le serveur sert deux fois la
+            # même page, les doublons ne doivent pas être relancés deux fois.
+            nouveaux = 0
             for record in records:
+                identifiant = record.get("id")
+                if identifiant is not None:
+                    if identifiant in seen_ids:
+                        continue
+                    seen_ids.add(identifiant)
+                nouveaux += 1
                 yield record
-            total_yielded += len(records)
+            total_yielded += nouveaux
 
-            # --- Conditions d'arrêt, toutes positives -----------------------
+            # --- Conditions d'arrêt ------------------------------------------
+            # Les métadonnées de pagination d'HelloAsso se sont révélées peu
+            # fiables sur cet endpoint (`totalCount` à -1, `totalPages` à 1
+            # malgré plusieurs pages). Le seul signal digne de confiance est
+            # le nombre d'éléments reçus : tant qu'une page est pleine, il en
+            # reste probablement d'autres. `totalPages` n'est donc plus pris
+            # en compte, et `totalCount` ne l'est que s'il est cohérent.
             if not records:
-                break
-            if total_count is not None and total_yielded >= total_count:
                 break
             if len(records) < page_size:
                 # Page incomplète : c'est la dernière.
                 break
-
-            total_pages = pagination.get("totalPages")
-            page_index = pagination.get("pageIndex") or page_number
-            if total_pages is not None and int(page_index) >= int(total_pages):
+            if total_count is not None and total_yielded >= total_count:
                 break
+            if not nouveaux:
+                # Le serveur renvoie les mêmes éléments qu'à la page
+                # précédente : il ignore notre pagination, inutile d'insister.
+                logger.warning(
+                    "%s : page %s identique à la précédente, pagination "
+                    "interrompue", path, page_number,
+                )
+                break
+
+            page_index = pagination.get("pageIndex") or page_number
 
             # --- Avancée à la page suivante ---------------------------------
             # L'index de page est incrémenté dans tous les cas, y compris
