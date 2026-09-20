@@ -180,6 +180,9 @@ class Config:
 
     # --- Exécution ----------------------------------------------------------
     state_db: str = "data/relances.sqlite3"
+    # Liste d'exclusion (désinscription) : adresses jamais relancées. Une par
+    # ligne. À placer dans un volume persistant, comme la base anti-doublon.
+    suppression_file: str = "data/desinscrits.txt"
     log_file: str = ""
     log_level: str = "INFO"
     dry_run: bool = False
@@ -236,6 +239,7 @@ class Config:
             alert_webhook_url=_get("ALERT_WEBHOOK_URL"),
             healthcheck_url=_get("HEALTHCHECK_URL"),
             state_db=_get("STATE_DB", "data/relances.sqlite3"),
+            suppression_file=_get("SUPPRESSION_FILE", "data/desinscrits.txt"),
             log_file=_get("LOG_FILE"),
             log_level=_get("LOG_LEVEL", "INFO"),
             dry_run=_get_bool("DRY_RUN", False),

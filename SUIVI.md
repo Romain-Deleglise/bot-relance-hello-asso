@@ -37,7 +37,8 @@ Deux relances par échéance :
 | Pagination | **Confirmée sur l'API réelle** le 20/09/2026 — 198 items analysés (voir 6.1) |
 | Paiements mensuels (6.2) | **Confirmé (100 %)** : formulaire verrouillé en Année glissante, pas d'auto-renouvellement — le mail est le seul mécanisme de relance |
 | Robustesse | **Audit fait + correctifs appliqués** (voir 6.7) : en-têtes de délivrabilité, retry SMTP, fuseau, déduplication par personne |
-| Envoi de mails | Canal retenu : **AWS SES (SMTP)** — reste à renseigner `.env` et vérifier région / production access / SPF-DKIM (voir 6.4). Jamais testé en réel à ce jour |
+| Envoi de mails | **Testé en réel via AWS SES** (région eu-west-3) le 20/09 : 6 mails envoyés en mode redirection, 0 erreur |
+| Désinscription | **Liste d'exclusion** (`data/desinscrits.txt`) : `--unsubscribe adresse@x.fr` retire quelqu'un, plus jamais relancé (voir 6.9) |
 | Mise en cron | Non faite |
 | Textes des mails | **Faits (20/09)** : deux textes de Romain intégrés ; timing du mail d'expiration calé pour partir après l'échéance ; variable `$montant` ajoutée |
 
@@ -405,6 +406,21 @@ Exigence Romain : si le service d'envoi tombe, il faut être alerté par un cana
 
 Les deux URL se règlent dans `.env` (`ALERT_WEBHOOK_URL`, `HEALTHCHECK_URL`).
 Fortement recommandé de renseigner au moins l'une des deux en production.
+
+---
+
+### 6.9 Désinscription (liste d'exclusion)
+
+Les mails portent un lien « Se désinscrire » (mailto vers `contact@pauseia.fr`)
+et l'en-tête `List-Unsubscribe`. Comme il n'y a pas de page web de
+désinscription (contrairement à CiviCRM), le traitement est manuel mais trivial :
+
+* **Désinscrire quelqu'un** : `python3 -m relance_adhesions --unsubscribe adresse@x.fr`
+  (ajoute l'adresse à `data/desinscrits.txt` ; elle ne sera plus jamais relancée).
+* Le fichier `data/desinscrits.txt` (une adresse par ligne) peut aussi s'éditer
+  à la main. Il doit être dans un volume persistant, comme la base anti-doublon.
+* À chaque exécution, ces adresses sont écartées avant toute relance, et le
+  nombre d'exclusions est journalisé.
 
 ---
 

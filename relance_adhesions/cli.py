@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from . import notify
+from . import notify, suppression
 from .config import Config, ConfigError, load_env_file
 from .helloasso import (
     VALIDITY_MOVING_YEAR,
@@ -209,6 +209,19 @@ def run(config: Config, today: date | None = None, dump_dir: str | None = None) 
             supervise(False, f"API HelloAsso indisponible : {exc}")
             return 3
 
+        # Liste d'exclusion (désinscription) : on retire ces adresses avant tout.
+        suppressed = suppression.load_suppressed(config.suppression_file)
+        if suppressed:
+            avant = len(memberships)
+            memberships = [
+                m for m in memberships if m.email.lower() not in suppressed
+            ]
+            retires = avant - len(memberships)
+            if retires:
+                logger.info(
+                    "%s adhésion(s) écartée(s) via la liste de désinscription", retires
+                )
+
         analysed = len(memberships)
         latest = dedupe_memberships(memberships)
         selected = select_to_remind(
@@ -360,6 +373,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Dossier où écrire les mails rendus (.eml/.txt/.html) en dry-run, "
              "pour les relire avant tout envoi réel",
     )
+    parser.add_argument(
+        "--unsubscribe", metavar="EMAIL", default=None,
+        help="Ajoute une adresse à la liste d'exclusion (désinscription) puis quitte. "
+             "Cette adresse ne sera plus jamais relancée.",
+    )
     parser.add_argument("--log-level", default=None, help="DEBUG, INFO, WARNING, ERROR")
     parser.add_argument(
         "--today", default=None,
@@ -397,6 +415,22 @@ def main(argv: list[str] | None = None) -> int:
         config.log_level = args.log_level
 
     setup_logging(config.log_level, config.log_file)
+
+    # Désinscription : ajoute l'adresse à la liste d'exclusion et s'arrête.
+    if args.unsubscribe:
+        try:
+            ajoutee = suppression.add_suppressed(config.suppression_file, args.unsubscribe)
+        except ValueError as exc:
+            logger.error("Désinscription impossible : %s", exc)
+            return 2
+        if ajoutee:
+            logger.info(
+                "%s a été désinscrit : plus aucune relance ne lui sera envoyée.",
+                args.unsubscribe.strip().lower(),
+            )
+        else:
+            logger.info("%s est déjà désinscrit.", args.unsubscribe.strip().lower())
+        return 0
 
     today = None
     if args.today:
