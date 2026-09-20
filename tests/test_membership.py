@@ -192,6 +192,35 @@ def test_rattrapage_des_adhesions_recemment_expirees():
     assert [r.stage for r in relances] == [STAGE_EXPIRATION]
 
 
+def test_renouvellement_entre_les_deux_mails_annule_le_mail_2():
+    """Si l'adhérent renouvelle après le mail 1, il ne reçoit PAS le mail 2.
+
+    Reproduit le cas réel : au moment du mail 2 (J+1), le bot considère la
+    dernière adhésion de la personne. Le renouvellement a créé un nouvel item à
+    échéance lointaine ; après déduplication par personne, l'ancienne adhésion
+    expirée disparaît, donc aucune relance « a expiré » ne part.
+    """
+    from relance_adhesions.membership import dedupe_memberships
+
+    today = date(2026, 9, 23)  # lendemain de l'échéance de l'ancienne adhésion
+
+    ancienne = normalize_item(
+        make_item(1, "2025-09-22T09:00:00Z"), "MovingYear", None, 365
+    )  # échéance 2026-09-22 (expirée hier)
+    # Même personne (même e-mail + nom), renouvellement le 10/09/2026.
+    renouvellement = normalize_item(
+        make_item(2, "2026-09-10T09:00:00Z"), "MovingYear", None, 365
+    )  # échéance 2027-09-10
+
+    # Sans renouvellement : le mail 2 partirait bien.
+    seul = dedupe_memberships([ancienne])
+    assert [r.stage for r in select_to_remind(seul, today, 15, 14)] == [STAGE_EXPIRATION]
+
+    # Avec renouvellement : après dédup, l'ancienne disparaît → aucun mail 2.
+    apres_renouv = dedupe_memberships([ancienne, renouvellement])
+    assert select_to_remind(apres_renouv, today, 15, 14) == []
+
+
 def test_montant_formate_depuis_les_centimes():
     item = make_item(1)
     item["amount"] = 2500
